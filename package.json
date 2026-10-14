@@ -19,7 +19,7 @@
     "start": "node scripts/start.mjs",
     "build": "npm run build -w @outis/shared -w @outis/db -w @outis/engine -w @outis/worker -w @outis/bot -w @outis/api -w @outis/web",
     "build:packages": "npm run build -w @outis/shared -w @outis/db -w @outis/engine",
-    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build:packages && npm run build -w @outis/bot && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "db:generate": "npm run generate -w @outis/db",
     "db:migrate": "npm run migrate:dev -w @outis/db",
