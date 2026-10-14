@@ -91,7 +91,14 @@ export function ApiDown({ message }: { message: string }) {
     <div className="glass rounded-2xl border-bad/30 px-5 py-4 text-sm">
       <p className="font-medium text-bad">Data unavailable</p>
       <p className="mt-1 text-muted">
-        {message}. Nothing is shown rather than stale or sample data. Start everything with <code className="num text-ink">npm start</code>.
+        {message.replace(/[.\s]+$/, '')}. Nothing is shown rather than stale or sample data.{' '}
+        {process.env.VERCEL === '1' ? (
+          <>The Settings page and the API project&apos;s logs on Vercel show what is missing.</>
+        ) : (
+          <>
+            Start everything with <code className="num text-ink">npm start</code>.
+          </>
+        )}
       </p>
     </div>
   );
