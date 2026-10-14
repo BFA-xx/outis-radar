@@ -1,0 +1,364 @@
+{
+ "data": [
+  {
+   "id": "solana_CeADBx5ycyvrRN5PEhPF1VkoHBxMAjQJmVBZmpbQ5rGz",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.000003076166325206716962881510709247461823541313941101270335639864",
+    "base_token_price_native_currency": "0.0000000281460395290575",
+    "quote_token_price_usd": "230.0603339020870298278053937742703473869751311294853074875876",
+    "quote_token_price_native_currency": "2.10498606626584",
+    "base_token_price_quote_token": "0.00000001337112866",
+    "quote_token_price_base_token": "74788002.201613",
+    "address": "CeADBx5ycyvrRN5PEhPF1VkoHBxMAjQJmVBZmpbQ5rGz",
+    "name": "Mia / NVDAx",
+    "pool_created_at": "2026-10-11T10:59:10Z",
+    "fdv_usd": "3076.166325",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "-8.56",
+     "m15": "-8.56",
+     "m30": "-8.56",
+     "h1": "-8.56",
+     "h6": "-8.56",
+     "h24": "-8.56"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     },
+     "m15": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     },
+     "m30": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     },
+     "h1": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     },
+     "h6": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     },
+     "h24": {
+      "buys": 14,
+      "sells": 16,
+      "buyers": 12,
+      "sellers": 14
+     }
+    },
+    "volume_usd": {
+     "m5": "2783.2708947549",
+     "m15": "2783.2708947549",
+     "m30": "2783.2708947549",
+     "h1": "2783.2708947549",
+     "h6": "2783.2708947549",
+     "h24": "2783.2708947549"
+    },
+    "reserve_in_usd": "2439.3096"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_ADrAY3aPJeZh5SNQVBzqkfGo8tgHGuDZKLKzaapDpump",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "pump-fun",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_8d8rWvzWbTWEaf5aQi55C8T5tQm1hP7rjef8JzQ4PmMt",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00000306466643496011597204766061336567243147362430139638708517094795",
+    "base_token_price_native_currency": "0.0000000280453629503417",
+    "quote_token_price_usd": "109.275336299117740172341912247582607883865986493",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00000002804536295",
+    "quote_token_price_base_token": "35656518.3973779",
+    "address": "8d8rWvzWbTWEaf5aQi55C8T5tQm1hP7rjef8JzQ4PmMt",
+    "name": "Crypto / SOL",
+    "pool_created_at": "2026-10-11T10:59:05Z",
+    "fdv_usd": "3064.666435",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "-44.642",
+     "m15": "-44.642",
+     "m30": "-44.642",
+     "h1": "-44.642",
+     "h6": "-44.642",
+     "h24": "-44.642"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     },
+     "m15": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     },
+     "m30": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     },
+     "h1": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     },
+     "h6": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     },
+     "h24": {
+      "buys": 22,
+      "sells": 24,
+      "buyers": 21,
+      "sellers": 21
+     }
+    },
+    "volume_usd": {
+     "m5": "4843.7483159436",
+     "m15": "4843.7483159436",
+     "m30": "4843.7483159436",
+     "h1": "4843.7483159436",
+     "h6": "4843.7483159436",
+     "h24": "4843.7483159436"
+    },
+    "reserve_in_usd": "2428.8496"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_6U43Jiihi1ksoGp5GMhRXvBwQ9BVRPtNvqMnp6M6pump",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "pump-fun",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_EmQzHzwFhjk32vqKixvgDVTfpGrcC2GoyQmHFpnahw9q",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.000000000569074173469333096487904259161458628743750970024500573333857728",
+    "base_token_price_native_currency": "0.00000000000687317372143642",
+    "quote_token_price_usd": "109.279048702723144005171761456727589079407610208",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.000000000006873173721",
+    "quote_token_price_base_token": "145493194342.105",
+    "address": "EmQzHzwFhjk32vqKixvgDVTfpGrcC2GoyQmHFpnahw9q",
+    "name": "Elya / SOL",
+    "pool_created_at": "2026-10-11T10:59:04Z",
+    "fdv_usd": "0.5690741735",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "-99.999",
+     "m15": "-99.999",
+     "m30": "-99.999",
+     "h1": "-99.999",
+     "h6": "-99.999",
+     "h24": "-99.999"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 93,
+      "sells": 91,
+      "buyers": 74,
+      "sellers": 82
+     },
+     "m15": {
+      "buys": 370,
+      "sells": 377,
+      "buyers": 174,
+      "sellers": 187
+     },
+     "m30": {
+      "buys": 370,
+      "sells": 377,
+      "buyers": 174,
+      "sellers": 187
+     },
+     "h1": {
+      "buys": 370,
+      "sells": 377,
+      "buyers": 174,
+      "sellers": 187
+     },
+     "h6": {
+      "buys": 370,
+      "sells": 377,
+      "buyers": 174,
+      "sellers": 187
+     },
+     "h24": {
+      "buys": 370,
+      "sells": 377,
+      "buyers": 174,
+      "sellers": 187
+     }
+    },
+    "volume_usd": {
+     "m5": "1930.0780090236",
+     "m15": "8457.0866896943",
+     "m30": "8457.0866896943",
+     "h1": "8457.0866896943",
+     "h6": "8457.0866896943",
+     "h24": "8457.0866896943"
+    },
+    "reserve_in_usd": "1.0709"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_7nhzBfR8DhR6rSTf989VZRtyYQqCythRADetrRgFN1D4",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "meteora-damm-v2",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "x",
+   "type": "pool",
+   "attributes": {
+    "name": "broken"
+   },
+   "relationships": {}
+  }
+ ],
+ "included": [
+  {
+   "id": "solana_ADrAY3aPJeZh5SNQVBzqkfGo8tgHGuDZKLKzaapDpump",
+   "type": "token",
+   "attributes": {
+    "address": "ADrAY3aPJeZh5SNQVBzqkfGo8tgHGuDZKLKzaapDpump",
+    "name": "Mia",
+    "symbol": "Mia",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/fhkad0ipvhrsp2w2itf7z14p3f42",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+   "type": "token",
+   "attributes": {
+    "address": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+    "name": "NVIDIA xStock",
+    "symbol": "NVDAx",
+    "decimals": 8,
+    "image_url": "https://coin-images.coingecko.com/coins/images/55633/large/Ticker_NVDA__Company_Name_NVIDIA_Corp__size_200x200_2x.png?1746862704",
+    "coingecko_coin_id": "nvidia-xstock"
+   }
+  },
+  {
+   "id": "pump-fun",
+   "type": "dex",
+   "attributes": {
+    "name": "Pump.fun"
+   }
+  },
+  {
+   "id": "solana_6U43Jiihi1ksoGp5GMhRXvBwQ9BVRPtNvqMnp6M6pump",
+   "type": "token",
+   "attributes": {
+    "address": "6U43Jiihi1ksoGp5GMhRXvBwQ9BVRPtNvqMnp6M6pump",
+    "name": "The Majestic Horse",
+    "symbol": "Crypto",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/s9isawc2il9ktm3vq7oqffqlkr5v",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_So11111111111111111111111111111111111111112",
+   "type": "token",
+   "attributes": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL",
+    "decimals": 9,
+    "image_url": "https://coin-images.coingecko.com/coins/images/21629/large/solana.jpg?1696520989",
+    "coingecko_coin_id": "wrapped-solana"
+   }
+  },
+  {
+   "id": "solana_7nhzBfR8DhR6rSTf989VZRtyYQqCythRADetrRgFN1D4",
+   "type": "token",
+   "attributes": {
+    "address": "7nhzBfR8DhR6rSTf989VZRtyYQqCythRADetrRgFN1D4",
+    "name": "Porno looking girlfriend",
+    "symbol": "Elya",
+    "decimals": 6,
+    "image_url": null,
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "meteora-damm-v2",
+   "type": "dex",
+   "attributes": {
+    "name": "Meteora DAMM V2"
+   }
+  }
+ ]
+}

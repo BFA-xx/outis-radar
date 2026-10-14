@@ -1,0 +1,334 @@
+/**
+ * Telegram bot handlers. Built by a factory so tests can drive real grammY
+ * updates against a fake Telegram API.
+ *
+ * Access: default-deny. Only Telegram user ids listed in
+ * TELEGRAM_ALLOWED_USER_IDS can use it, and only in private chats. Anyone else
+ * gets their own id back (so the owner can allowlist themselves) and nothing
+ * else — no data leaves for an unknown user.
+ */
+import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy';
+import type { UserFromGetMe } from 'grammy/types';
+import { type Prisma, type PrismaClient } from '@outis/db';
+import { esc, type Sender } from '@outis/engine';
+import {
+  ALERT_KINDS,
+  type AlertKind,
+  type AlertPrefs,
+  CHAINS,
+  DEFAULT_ALERT_PREFS,
+  LAUNCHPADS,
+  PREF_SETTERS,
+  applyPrefSetting,
+  getChain,
+  getLaunchpad,
+  isPlausibleAddress,
+  normalizeAddress,
+  readPrefs,
+} from '@outis/shared';
+
+export interface BotDeps {
+  prisma: PrismaClient;
+  allowedUserIds: Set<string>;
+  /** For tests: skip getMe. */
+  botInfo?: UserFromGetMe;
+}
+
+const KIND_LABEL: Record<AlertKind, string> = {
+  discovery: 'New tokens',
+  launchpad: 'Launchpad graduations',
+  risk: 'Risk escalations',
+  wallet: 'Wallet trades',
+  watch: 'Watchlist moves',
+};
+
+const HELP = [
+  '<b>OUTIS RADAR alerts</b>',
+  '',
+  '/prefs — your settings, with on/off switches',
+  '/set &lt;key&gt; &lt;value&gt; — e.g. <code>/set minliq 50k</code>',
+  `   keys: ${Object.keys(PREF_SETTERS).join(', ')}`,
+  '/chains solana,base — limit alerts to chains (<code>/chains all</code> to reset)',
+  '/launchpads pumpfun,fourmeme — which launchpads send graduation alerts (<code>/launchpads all</code>)',
+  '/watch &lt;chain&gt; &lt;address&gt; — add a token to your watchlist',
+  '/unwatch &lt;address&gt; — remove it',
+  '/wallets — tracked wallets',
+  '/status — scans and alert counts',
+  '/pause · /resume — stop/start all alerts',
+  '/test — send yourself a sample alert',
+  '',
+  '<i>Research only — nothing here is a recommendation.</i>',
+].join('\n');
+
+/** The command menu Telegram shows. */
+export const BOT_COMMANDS = [
+  { command: 'prefs', description: 'Your alert settings' },
+  { command: 'set', description: 'Change a threshold' },
+  { command: 'chains', description: 'Limit alerts to chains' },
+  { command: 'launchpads', description: 'Graduation alerts per launchpad' },
+  { command: 'watch', description: 'Watch a token' },
+  { command: 'wallets', description: 'Tracked wallets' },
+  { command: 'status', description: 'Scans and alert counts' },
+  { command: 'pause', description: 'Pause alerts' },
+  { command: 'resume', description: 'Resume alerts' },
+  { command: 'help', description: 'Help' },
+];
+
+/** Telegram bot tokens look like "<digits>:<secret>". */
+export const TOKEN_SHAPE = /^\d{6,12}:[A-Za-z0-9_-]{30,}$/;
+
+export function allowedUserIdsFromEnv(): Set<string> {
+  return new Set((process.env.TELEGRAM_ALLOWED_USER_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+export function describePrefs(p: AlertPrefs, active: boolean): string {
+  const d = p.discovery;
+  return [
+    `<b>Alerts ${active ? 'ON' : 'PAUSED'}</b>`,
+    ...ALERT_KINDS.map((k) => `${p.kinds[k] ? '✅' : '⬜️'} ${KIND_LABEL[k]}`),
+    '',
+    `<b>Chains:</b> ${p.chains.length ? p.chains.map((c) => esc(getChain(c)?.displayName ?? c)).join(', ') : 'all scanned'}`,
+    '<b>New-token filter</b>',
+    `  liquidity ≥ $${d.minLiquidityUsd.toLocaleString('en-US')} · 24h volume ≥ $${d.minVolumeH24.toLocaleString('en-US')}`,
+    `  age ≤ ${d.maxAgeMinutes} min · momentum ≥ ${d.minMomentum} · risk ≤ ${d.maxRisk}`,
+    `  at least ${Math.round(d.minRiskCoverage * 100)}% of risk checks must have run`,
+    `<b>Graduations:</b> ${p.launchpad.ids.length ? p.launchpad.ids.map((id) => esc(getLaunchpad(id)?.name ?? id)).join(', ') : 'all known launchpads'} · liquidity ≥ $${p.launchpad.minLiquidityUsd.toLocaleString('en-US')} · known risk ≤ ${p.launchpad.maxRisk}`,
+    `<b>Watchlist move:</b> ±${p.watch.priceMovePct}% in 1h`,
+    `<b>Wallet trades:</b> ≥ ${p.wallet.minNative} native coin`,
+    `<b>Cap:</b> ${p.maxPerHour} alerts/hour`,
+  ].join('\n');
+}
+
+function kindsKeyboard(p: AlertPrefs): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  ALERT_KINDS.forEach((k, i) => {
+    kb.text(`${p.kinds[k] ? '✅' : '⬜️'} ${KIND_LABEL[k]}`, `toggle:${k}`);
+    if (i % 2 === 1) kb.row();
+  });
+  return kb;
+}
+
+export function createBot(token: string, deps: BotDeps): Bot {
+  const bot = new Bot(token, deps.botInfo ? { botInfo: deps.botInfo } : undefined);
+  const { prisma } = deps;
+
+  const subscriberFor = (ctx: Context) => prisma.telegramSubscriber.findUnique({ where: { chatId: BigInt(ctx.chat!.id) } });
+  const savePrefs = (chatId: number, prefs: AlertPrefs) =>
+    prisma.telegramSubscriber.update({ where: { chatId: BigInt(chatId) }, data: { prefs: prefs as unknown as Prisma.InputJsonValue } });
+
+  // ── Gate: allowlisted users, private chats ───────────────────────────────
+  bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (!uid || !ctx.chat) return;
+    if (!deps.allowedUserIds.has(String(uid))) {
+      if (ctx.chat.type === 'private' && ctx.message?.text?.startsWith('/start')) {
+        await ctx.reply(
+          `This bot is private.\nYour Telegram user id is <code>${uid}</code>.\nIf this is your bot, add that id to <code>TELEGRAM_ALLOWED_USER_IDS</code> on the server, restart it, then send /start again.`,
+          { parse_mode: 'HTML' },
+        );
+      }
+      return; // nothing else is answered for unknown users
+    }
+    if (ctx.chat.type !== 'private') {
+      if (ctx.message?.text?.startsWith('/')) await ctx.reply('Use me in a private chat — alerts are personal.');
+      return;
+    }
+    await next();
+  });
+
+  bot.command('start', async (ctx) => {
+    await prisma.telegramSubscriber.upsert({
+      where: { chatId: BigInt(ctx.chat.id) },
+      create: { chatId: BigInt(ctx.chat.id), userId: BigInt(ctx.from!.id), username: ctx.from?.username ?? null, prefs: DEFAULT_ALERT_PREFS as unknown as Prisma.InputJsonValue },
+      update: { active: true, username: ctx.from?.username ?? null },
+    });
+    await ctx.reply(`👋 You're subscribed. Defaults are strict, so expect a few alerts a day, not a firehose.\n\n${HELP}`, { parse_mode: 'HTML' });
+  });
+
+  bot.command('help', (ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
+
+  // Everything below needs a subscription.
+  const needSub = async (ctx: Context) => {
+    const s = await subscriberFor(ctx);
+    if (!s) await ctx.reply('Send /start first.');
+    return s;
+  };
+
+  bot.command('prefs', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const p = readPrefs(s.prefs);
+    await ctx.reply(describePrefs(p, s.active), { parse_mode: 'HTML', reply_markup: kindsKeyboard(p) });
+  });
+
+  bot.callbackQuery(/^toggle:(discovery|launchpad|risk|wallet|watch)$/, async (ctx) => {
+    const s = await subscriberFor(ctx);
+    if (!s) return ctx.answerCallbackQuery({ text: 'Send /start first.' });
+    const kind = ctx.match[1] as AlertKind;
+    const p = readPrefs(s.prefs);
+    p.kinds[kind] = !p.kinds[kind];
+    await savePrefs(ctx.chat!.id, p);
+    await ctx.answerCallbackQuery({ text: `${KIND_LABEL[kind]}: ${p.kinds[kind] ? 'on' : 'off'}` });
+    await ctx.editMessageText(describePrefs(p, s.active), { parse_mode: 'HTML', reply_markup: kindsKeyboard(p) }).catch(() => undefined);
+  });
+
+  bot.command('set', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const [key, value] = ctx.match.trim().split(/\s+/);
+    if (!key || value === undefined) {
+      return ctx.reply(`Usage: /set &lt;key&gt; &lt;value&gt;\n${Object.entries(PREF_SETTERS).map(([k, v]) => `<code>${k}</code> — ${esc(v.label)}`).join('\n')}`, { parse_mode: 'HTML' });
+    }
+    const r = applyPrefSetting(readPrefs(s.prefs), key, value);
+    if (!r.ok) return ctx.reply(`❌ ${esc(r.error)}`, { parse_mode: 'HTML' });
+    await savePrefs(ctx.chat.id, r.prefs);
+    await ctx.reply(`✅ ${esc(PREF_SETTERS[key.toLowerCase()].label)} updated.\n\n${describePrefs(r.prefs, s.active)}`, { parse_mode: 'HTML' });
+  });
+
+  bot.command('chains', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const arg = ctx.match.trim().toLowerCase();
+    const p = readPrefs(s.prefs);
+    if (!arg) {
+      return ctx.reply(
+        `Current: ${p.chains.length ? p.chains.join(', ') : 'all'}\nAvailable: ${CHAINS.map((c) => `<code>${c.id}</code>`).join(' ')}\nExample: <code>/chains solana,base,robinhood</code> or <code>/chains all</code>`,
+        { parse_mode: 'HTML' },
+      );
+    }
+    const ids = arg === 'all' ? [] : arg.split(/[\s,]+/).filter(Boolean);
+    const unknown = ids.filter((id) => !getChain(id));
+    if (unknown.length) return ctx.reply(`Unknown chain(s): ${unknown.join(', ')}`);
+    p.chains = ids;
+    await savePrefs(ctx.chat.id, p);
+    await ctx.reply(`✅ Chains: ${ids.length ? ids.join(', ') : 'all scanned'}`);
+  });
+
+  bot.command('launchpads', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const arg = ctx.match.trim().toLowerCase();
+    const p = readPrefs(s.prefs);
+    if (!arg) {
+      return ctx.reply(
+        `Current: ${p.launchpad.ids.length ? p.launchpad.ids.join(', ') : 'all'}\nAvailable: ${LAUNCHPADS.map((l) => `<code>${l.id}</code> (${esc(l.name)})`).join(' ')}\nExample: <code>/launchpads pumpfun,fourmeme</code> or <code>/launchpads all</code>`,
+        { parse_mode: 'HTML' },
+      );
+    }
+    const ids = arg === 'all' ? [] : arg.split(/[\s,]+/).filter(Boolean);
+    const unknown = ids.filter((id) => !getLaunchpad(id));
+    if (unknown.length) return ctx.reply(`Unknown launchpad(s): ${unknown.join(', ')}`);
+    p.launchpad.ids = ids;
+    await savePrefs(ctx.chat.id, p);
+    await ctx.reply(`✅ Graduation alerts from: ${ids.length ? ids.join(', ') : 'all known launchpads'}`);
+  });
+
+  bot.command(['pause', 'resume'], async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const active = ctx.message?.text?.startsWith('/resume') ?? false;
+    await prisma.telegramSubscriber.update({ where: { id: s.id }, data: { active } });
+    await ctx.reply(active ? '▶️ Alerts resumed.' : '⏸ Alerts paused. /resume to start again.');
+  });
+
+  bot.command('watch', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const [chainId, address] = ctx.match.trim().split(/\s+/);
+    const chain = chainId ? getChain(chainId.toLowerCase()) : undefined;
+    if (!chain || !address) return ctx.reply('Usage: /watch <chain> <address>  e.g. /watch solana So1…');
+    if (!isPlausibleAddress(chain, address)) return ctx.reply(`That is not a ${chain.displayName} address.`);
+    const list = await prisma.watchlist.upsert({ where: { name: 'Telegram' }, create: { name: 'Telegram' }, update: {} });
+    const addr = normalizeAddress(chain, address);
+    await prisma.watchlistItem.upsert({
+      where: { watchlistId_kind_chainId_address: { watchlistId: list.id, kind: 'token', chainId: chain.id, address: addr } },
+      create: { watchlistId: list.id, kind: 'token', chainId: chain.id, address: addr },
+      update: {},
+    });
+    const t = await prisma.token.findUnique({ where: { chainId_address: { chainId: chain.id, address: addr } } });
+    await ctx.reply(`👁 Watching ${esc(t?.symbol ?? addr)} on ${esc(chain.displayName)}${t ? '' : ' (not in discovery data yet — alerts start once it is)'}.`, { parse_mode: 'HTML' });
+  });
+
+  bot.command('unwatch', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const address = ctx.match.trim();
+    if (!address) return ctx.reply('Usage: /unwatch <address>');
+    const r = await prisma.watchlistItem.deleteMany({ where: { kind: 'token', OR: [{ address }, { address: address.toLowerCase() }] } });
+    await ctx.reply(r.count ? `Removed from ${r.count} watchlist(s).` : 'Not on any watchlist.');
+  });
+
+  bot.command('wallets', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const ws = await prisma.trackedWallet.findMany({ orderBy: { createdAt: 'desc' }, take: 20 });
+    if (!ws.length) return ctx.reply('No tracked wallets. Add them on the dashboard’s Wallets page.');
+    await ctx.reply(
+      ws
+        .map((w) => `• <b>${esc(w.label ?? `${w.address.slice(0, 6)}…${w.address.slice(-4)}`)}</b> · ${esc(getChain(w.chainId)?.displayName ?? w.chainId)} · ${esc(w.lastSyncStatus ?? 'queued')}`)
+        .join('\n'),
+      { parse_mode: 'HTML' },
+    );
+  });
+
+  bot.command('status', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const day = new Date(Date.now() - 24 * 60 * 60_000);
+    const [lastScan, tokens, sent, pending, suppressed] = await Promise.all([
+      prisma.scanRun.findFirst({ where: { job: 'discovery-scan', status: { not: 'skipped' } }, orderBy: { startedAt: 'desc' } }),
+      prisma.token.count(),
+      prisma.alertEvent.count({ where: { subscriberId: s.id, status: 'sent', sentAt: { gte: day } } }),
+      prisma.alertEvent.count({ where: { subscriberId: s.id, status: 'pending' } }),
+      prisma.alertEvent.count({ where: { subscriberId: s.id, status: 'suppressed', createdAt: { gte: day } } }),
+    ]);
+    const mins = lastScan ? Math.round((Date.now() - (lastScan.finishedAt ?? lastScan.startedAt).getTime()) / 60_000) : null;
+    await ctx.reply(
+      [
+        `<b>Status</b>`,
+        `Last scan: ${lastScan ? `${esc(lastScan.status)}, ${mins} min ago` : 'never'}`,
+        `Tokens tracked: ${tokens.toLocaleString('en-US')}`,
+        `Your alerts (24h): ${sent} sent · ${pending} pending · ${suppressed} held back by the hourly cap`,
+        `Alerts are ${s.active ? 'ON' : 'PAUSED'}.`,
+      ].join('\n'),
+      { parse_mode: 'HTML' },
+    );
+  });
+
+  bot.command('test', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    await prisma.alertEvent.create({
+      data: { subscriberId: s.id, kind: 'discovery', dedupKey: `test:${Date.now()}`, text: '🧪 <b>TEST ALERT</b>\nIf you can read this, delivery works. Real alerts look the same, with live data.', status: 'pending' },
+    });
+    await ctx.reply('Queued a test alert — it arrives within a minute.');
+  });
+
+  bot.on('message:text', (ctx) => ctx.reply('Unknown command. /help lists them.'));
+
+  bot.catch((err) => {
+    // Never log the update payload (it can contain user text) or the token.
+    console.error(`bot handler error: ${err.error instanceof Error ? err.error.message : String(err.error)}`.slice(0, 300));
+  });
+
+  return bot;
+}
+
+/** Telegram sender for the outbox. Maps Telegram errors to retry / give up. */
+export function telegramSender(bot: Bot): Sender {
+  return async (chatId, html) => {
+    try {
+      await bot.api.sendMessage(Number(chatId), html, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof GrammyError) {
+        if (err.error_code === 429) return { ok: false, retryAfterMs: (err.parameters.retry_after ?? 5) * 1000, error: 'rate limited by Telegram' };
+        if (err.error_code === 403 || /chat not found|user is deactivated/i.test(err.description)) {
+          return { ok: false, permanent: true, error: err.description };
+        }
+        return { ok: false, error: `Telegram ${err.error_code}: ${err.description}` };
+      }
+      return { ok: false, error: `network: ${(err as Error).message}`.slice(0, 200) };
+    }
+  };
+}

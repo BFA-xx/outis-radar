@@ -1,0 +1,503 @@
+// OUTIS RADAR — database schema.
+//
+// Conventions:
+//  - A nullable market field means "the source did not report it", never zero.
+//  - Every market value carries where it came from (`fieldSources`, `source`)
+//    and when it was observed (`marketUpdatedAt`, `observedAt`).
+//  - Addresses are stored normalized (EVM lowercased, everything else as-is),
+//    so (chainId, address) is a real dedup key.
+
+generator client {
+  provider      = "prisma-client-js"
+  // native = this machine / CI; rhel-openssl-3.0.x = Vercel's Node runtime.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Supabase: DATABASE_URL is the pooled (pgbouncer) URL used at runtime,
+  // DIRECT_URL the session URL migrations need. Locally both are the same.
+  directUrl = env("DIRECT_URL")
+}
+
+/// Mirror of the code registry (packages/shared/src/chains.ts), synced by the
+/// worker so tokens and pairs can reference a real row.
+model Chain {
+  id          String   @id
+  displayName String
+  family      String
+  evmChainId  Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tokens Token[]
+  pairs  Pair[]
+}
+
+model Token {
+  id                String    @id @default(cuid())
+  chainId           String
+  address           String
+  symbol            String?
+  name              String?
+  decimals          Int?
+  imageUrl          String?
+  /// Provider that last supplied name/symbol/decimals.
+  metadataSource    String?
+  metadataUpdatedAt DateTime?
+  firstSeenAt       DateTime  @default(now())
+  firstSeenSource   String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // ── Latest assessment (denormalized for the feed; history in RiskAssessment) ──
+  /// 0–100, higher = riskier. Null = never assessed, which is NOT "low risk".
+  riskScore      Int?
+  riskLevel      String?
+  /// Share of applicable checks that actually produced a verdict (0–1).
+  riskCoverage   Float?
+  riskAssessedAt DateTime?
+  /// 0–100 opportunity/momentum ranking. Independent of risk.
+  momentumScore  Float?
+  /// Factor breakdown: every input, its weight and contribution.
+  momentum       Json?
+  momentumAt     DateTime?
+  /// Every check result of the latest assessment (what the detail page shows).
+  riskDetail     Json?
+  /// Last time contract/holder checks were requested (answered or not).
+  contractCheckedAt   DateTime?
+  /// When the next contract check is due. Sooner when the provider had not
+  /// indexed the token yet, later once it has answered.
+  contractNextCheckAt DateTime?
+
+  // ── Launchpad origin (see @outis/shared launchpads.ts) ──────────────────
+  /// Null = no evidence of a known launchpad, NOT proof it wasn't one.
+  launchpad         String?
+  /// curve | graduated | launched
+  launchpadStage    String?
+  /// dex (a pool on the launchpad's venue) | address (vanity suffix)
+  launchpadEvidence String?
+  /// When we first saw the token on its graduation venue.
+  graduatedAt       DateTime?
+
+  chain       Chain            @relation(fields: [chainId], references: [id])
+  pairs       Pair[]
+  checks      TokenCheck[]
+  assessments RiskAssessment[]
+
+  @@unique([chainId, address])
+  @@index([symbol])
+  @@index([contractNextCheckAt])
+  @@index([riskScore])
+  @@index([launchpad])
+  @@index([graduatedAt])
+  @@index([momentumScore])
+}
+
+/// Latest result of one risk check for one token. One row per (token, check):
+/// a re-run overwrites it, keeping the time it was observed.
+model TokenCheck {
+  id          String   @id @default(cuid())
+  tokenId     String
+  checkId     String
+  category    String
+  /// flagged | passed | not_checked | not_applicable | error
+  status      String
+  /// info | low | medium | high | critical (meaningful when flagged)
+  severity    String
+  /// low | medium | high
+  confidence  String
+  title       String
+  explanation String
+  evidence    Json?
+  source      String
+  observedAt  DateTime
+
+  token Token @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenId, checkId])
+  @@index([checkId, status])
+}
+
+/// Every computed assessment, kept for later evaluation of what the score said
+/// at the time (no look-ahead: an assessment only uses data observed before computedAt).
+model RiskAssessment {
+  id             BigInt   @id @default(autoincrement())
+  tokenId        String
+  score          Int
+  level          String
+  coverage       Float
+  categories     Json
+  flaggedChecks  String[]
+  momentumScore  Float?
+  computedAt     DateTime @default(now())
+
+  token Token @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@index([tokenId, computedAt])
+  @@index([computedAt])
+}
+
+/// Editable scoring configuration (weights, thresholds). Validated by zod in
+/// code; a missing row means "use the defaults".
+model ScoringConfig {
+  key       String   @id
+  config    Json
+  updatedAt DateTime @updatedAt
+}
+
+model Pair {
+  id                 String    @id @default(cuid())
+  chainId            String
+  address            String
+  dexId              String?
+  baseTokenId        String
+  quoteTokenAddress  String
+  quoteTokenSymbol   String?
+  quoteTokenName     String?
+  url                String?
+  pairCreatedAt      DateTime?
+  pairCreatedAtSource String?
+  /// The base token's most liquid pair. The discovery feed lists one row per
+  /// token by reading only primary pairs.
+  isPrimary          Boolean   @default(false)
+  /// Every reason this pair entered the pipeline (new_pool, token_boost, ...).
+  discoveryReasons   String[]
+  firstSeenAt        DateTime  @default(now())
+
+  // ── Latest merged market state ─────────────────────────────────────────
+  priceUsd        Float?
+  priceNative     Float?
+  liquidityUsd    Float?
+  fdvUsd          Float?
+  marketCapUsd    Float?
+  volumeM5        Float?
+  volumeH1        Float?
+  volumeH6        Float?
+  volumeH24       Float?
+  priceChangeM5   Float?
+  priceChangeH1   Float?
+  priceChangeH6   Float?
+  priceChangeH24  Float?
+  /// Full per-window buys/sells/buyers/sellers, as reported.
+  txns            Json?
+  /// Denormalized from `txns` for filtering and sorting.
+  txnsH1          Int?
+  txnsH24         Int?
+  buyersH24       Int?
+  sellersH24      Int?
+  /// field name → provider that supplied it.
+  fieldSources    Json?
+  estimatedFields String[]
+  marketUpdatedAt DateTime?
+  /// Last time a refresh was attempted, answered or not. Refresh order key, so
+  /// a pair no provider answers for cannot pin itself to the front of the queue.
+  refreshAttemptedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chain     Chain            @relation(fields: [chainId], references: [id])
+  baseToken Token            @relation(fields: [baseTokenId], references: [id], onDelete: Cascade)
+  snapshots MarketSnapshot[]
+
+  @@unique([chainId, address])
+  @@index([isPrimary, pairCreatedAt])
+  @@index([isPrimary, liquidityUsd])
+  @@index([isPrimary, volumeH24])
+  @@index([baseTokenId])
+  @@index([marketUpdatedAt])
+  @@index([chainId, refreshAttemptedAt])
+}
+
+/// Point-in-time observation of one pair by one source. One row per
+/// (pair, source, minute) — re-running a scan inside the same minute is a no-op.
+model MarketSnapshot {
+  id            BigInt   @id @default(autoincrement())
+  pairId        String
+  source        String
+  reason        String
+  observedAt    DateTime
+  bucket        DateTime
+  priceUsd      Float?
+  liquidityUsd  Float?
+  fdvUsd        Float?
+  marketCapUsd  Float?
+  volumeM5      Float?
+  volumeH1      Float?
+  volumeH24     Float?
+  txnsH1        Int?
+  txnsH24       Int?
+  buyersH1      Int?
+  sellersH1     Int?
+  priceChangeH1 Float?
+
+  pair Pair @relation(fields: [pairId], references: [id], onDelete: Cascade)
+
+  @@unique([pairId, source, bucket])
+  @@index([pairId, observedAt])
+  @@index([observedAt])
+}
+
+/// Rolling health of one provider, per chain ("*" = not chain-specific).
+model ProviderHealth {
+  id                  String    @id @default(cuid())
+  provider            String
+  scope               String
+  lastSuccessAt       DateTime?
+  lastErrorAt         DateTime?
+  /// Sanitized message — never contains URLs with credentials.
+  lastError           String?
+  consecutiveFailures Int       @default(0)
+  lastLatencyMs       Int?
+  requestsTotal       Int       @default(0)
+  errorsTotal         Int       @default(0)
+  rateLimitedTotal    Int       @default(0)
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([provider, scope])
+}
+
+/// Resume points for bounded scans, e.g. the refresh cursor per chain.
+model IngestionCheckpoint {
+  key       String   @id
+  cursor    Json
+  updatedAt DateTime @updatedAt
+}
+
+/// Mutual exclusion for scheduled jobs. A lease row (not a Postgres advisory
+/// lock) because advisory locks are bound to one connection, and pooled
+/// connections (pgbouncer/Supabase) do not keep a job on one connection.
+model JobLease {
+  name       String   @id
+  holder     String
+  acquiredAt DateTime
+  expiresAt  DateTime
+}
+
+model ScanRun {
+  id         String    @id @default(cuid())
+  job        String
+  trigger    String
+  status     String
+  chains     String[]
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  stats      Json?
+  error      String?
+
+  @@index([job, startedAt])
+}
+
+// ── Wallet intelligence (Milestone 4) ──────────────────────────────────────
+
+/// A wallet the user asked us to track. Labels are the user's own; nothing is
+/// ever labelled automatically.
+model TrackedWallet {
+  id             String    @id @default(cuid())
+  chainId        String
+  address        String
+  label          String?
+  note           String?
+  createdAt      DateTime  @default(now())
+  /// Where history starts: we only claim completeness from this point on.
+  trackedFrom    DateTime
+  lastSyncAt     DateTime?
+  lastSyncStatus String?
+  lastSyncError  String?
+  /// Provider-specific resume point (EVM: last block; Solana: newest signature).
+  syncCursor     Json?
+  /// Which source produced the history (rpc, public_rpc, blockscout, solana_rpc).
+  source         String?
+
+  transfers WalletTransfer[]
+
+  @@unique([chainId, address])
+  @@index([lastSyncAt])
+}
+
+/// One token movement into or out of a tracked wallet. tokenAddress "native"
+/// is the chain's native coin (SOL/ETH). Solana rows are per-transaction net
+/// deltas; EVM rows are per Transfer log.
+model WalletTransfer {
+  id            String   @id @default(cuid())
+  walletId      String
+  chainId       String
+  txHash        String
+  /// EVM log index; for per-transaction deltas, 0. Part of the dedup key.
+  logIndex      Int
+  blockNumber   BigInt?
+  blockTime     DateTime
+  tokenAddress  String
+  symbol        String?
+  direction     String
+  amount        Float
+  amountRaw     String
+  decimals      Int?
+  counterparty  String?
+  source        String
+  createdAt     DateTime @default(now())
+
+  wallet TrackedWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([walletId, txHash, tokenAddress, logIndex, direction])
+  @@index([walletId, blockTime])
+  @@index([chainId, tokenAddress, blockTime])
+}
+
+model Watchlist {
+  id        String          @id @default(cuid())
+  name      String          @unique
+  createdAt DateTime        @default(now())
+  items     WatchlistItem[]
+}
+
+model WatchlistItem {
+  id          String   @id @default(cuid())
+  watchlistId String
+  /// token | wallet
+  kind        String
+  chainId     String
+  address     String
+  note        String?
+  addedAt     DateTime @default(now())
+
+  watchlist Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistId, kind, chainId, address])
+  @@index([kind, chainId, address])
+}
+
+// ── Alerts (Milestone 5) ───────────────────────────────────────────────────
+
+/// A Telegram chat that receives alerts. Only allowlisted users can create one.
+model TelegramSubscriber {
+  id        String   @id @default(cuid())
+  /// Telegram chat id (can exceed 32 bits).
+  chatId    BigInt   @unique
+  userId    BigInt?
+  username  String?
+  /// Paused subscribers keep their settings but receive nothing.
+  active    Boolean  @default(true)
+  /// Alert preferences (validated by alertPrefsSchema in @outis/shared).
+  prefs     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events AlertEvent[]
+}
+
+/// Outbox: one row per alert per subscriber. The unique dedupKey is the
+/// deduplication — generating the same alert twice is a no-op.
+model AlertEvent {
+  id           String    @id @default(cuid())
+  subscriberId String
+  /// discovery | risk | wallet | watch
+  kind         String
+  dedupKey     String
+  /// pending | sent | failed | suppressed
+  status       String    @default("pending")
+  text         String
+  /// Structured facts behind the alert (for history and debugging).
+  payload      Json?
+  attempts     Int       @default(0)
+  error        String?
+  createdAt    DateTime  @default(now())
+  sentAt       DateTime?
+
+  subscriber TelegramSubscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, dedupKey])
+  @@index([status, createdAt])
+  @@index([subscriberId, createdAt])
+}
+
+// ── Paper trading & evaluation (Milestone 7) ───────────────────────────────
+
+/// A moment the system "would have said look at this". Recorded when a token
+/// first matches a rule, with the scores it had AT THAT TIME (no look-ahead),
+/// and followed afterwards to see what actually happened.
+model Signal {
+  id             String    @id @default(cuid())
+  rule           String
+  tokenId        String
+  pairId         String
+  chainId        String
+  firedAt        DateTime
+  /// Price/liquidity at the moment of the signal (reference only — not the entry).
+  priceUsd       Float?
+  liquidityUsd   Float?
+  momentumScore  Float?
+  riskScore      Int?
+  riskCoverage   Float?
+  ageMinutes     Float?
+  /// Hypothetical entry: first observation at least 1 minute after the signal.
+  entryAt        DateTime?
+  entryPrice     Float?
+  entryLiquidity Float?
+  /// horizon → { status, returnPct, netReturnPct, price, at }
+  outcomes       Json?
+  mfePct         Float?
+  maePct         Float?
+  collapsedAt    DateTime?
+  /// tracking | done
+  status         String    @default("tracking")
+  lastEvaluatedAt DateTime?
+
+  @@unique([rule, tokenId])
+  @@index([firedAt])
+  @@index([status])
+  @@index([pairId])
+}
+
+model PaperTrade {
+  id             String    @id @default(cuid())
+  tokenId        String
+  pairId         String
+  chainId        String
+  symbol         String?
+  signalId       String?
+  sizeUsd        Float
+  /// Swap fee per side, basis points.
+  feeBps         Int
+  /// Extra slippage per side on top of modelled price impact, basis points.
+  slippageBps    Int
+  takeProfitPct  Float?
+  stopLossPct    Float?
+  maxHoldMinutes Int?
+  openedAt       DateTime  @default(now())
+  /// The observed price used for the entry and when it was observed.
+  entryPrice     Float
+  entryObservedAt DateTime
+  entryLiquidity Float?
+  entryImpactPct Float
+  /// open | closed
+  status         String    @default("open")
+  closedAt       DateTime?
+  exitPrice      Float?
+  exitObservedAt DateTime?
+  exitImpactPct  Float?
+  /// take_profit | stop_loss | max_hold | manual | collapsed
+  exitReason     String?
+  pnlUsd         Float?
+  returnPct      Float?
+  mfePct         Float?
+  maePct         Float?
+  note           String?
+
+  @@index([status])
+  @@index([openedAt])
+}
+
+model PortfolioSnapshot {
+  id           BigInt   @id @default(autoincrement())
+  at           DateTime @default(now())
+  equityUsd    Float
+  cashUsd      Float
+  openValueUsd Float
+  realizedUsd  Float
+  openTrades   Int
+
+  @@index([at])
+}

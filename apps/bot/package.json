@@ -1,0 +1,19 @@
+{
+  "name": "@outis/bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram alerts (grammY): long polling locally, webhook + scheduled delivery when deployed.",
+  "main": "dist/bot.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@outis/db": "0.1.0",
+    "@outis/engine": "0.1.0",
+    "@outis/shared": "0.1.0",
+    "grammy": "1.46.0"
+  },
+  "types": "dist/bot.d.ts"
+}

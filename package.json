@@ -1,0 +1,38 @@
+{
+  "name": "outis-radar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-chain early-token discovery, wallet intelligence and risk analysis.",
+  "workspaces": [
+    "packages/shared",
+    "packages/db",
+    "packages/engine",
+    "apps/worker",
+    "apps/bot",
+    "apps/api",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "build": "npm run build -w @outis/shared -w @outis/db -w @outis/engine -w @outis/worker -w @outis/bot -w @outis/api -w @outis/web",
+    "build:packages": "npm run build -w @outis/shared -w @outis/db -w @outis/engine",
+    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "db:generate": "npm run generate -w @outis/db",
+    "db:migrate": "npm run migrate:dev -w @outis/db",
+    "db:deploy": "npm run migrate:deploy -w @outis/db",
+    "scan": "npm run scan -w @outis/worker --",
+    "dev:api": "npm run dev -w @outis/api",
+    "dev:web": "npm run dev -w @outis/web",
+    "test:db": "npm run migrate:test -w @outis/db",
+    "secrets": "node scripts/gen-secrets.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

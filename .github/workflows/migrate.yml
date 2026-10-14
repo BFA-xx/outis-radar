@@ -1,0 +1,29 @@
+# Apply database migrations when they change on main (and on demand).
+# Uses DIRECT_URL — migrations need a session connection, not the pooler.
+name: db-migrate
+
+on:
+  push:
+    branches: [main]
+    paths: ['packages/db/prisma/**']
+  workflow_dispatch:
+
+concurrency:
+  group: db-migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:deploy

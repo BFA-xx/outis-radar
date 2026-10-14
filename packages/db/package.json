@@ -1,0 +1,22 @@
+{
+  "name": "@outis/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate:dev": "node ../../scripts/with-env.mjs prisma migrate dev",
+    "migrate:deploy": "node ../../scripts/with-env.mjs prisma migrate deploy",
+    "migrate:test": "node ../../scripts/with-env.mjs node ../../scripts/migrate-test.mjs",
+    "validate": "node ../../scripts/with-env.mjs prisma validate"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  }
+}

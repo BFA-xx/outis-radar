@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: radar
+          POSTGRES_PASSWORD: radar
+          POSTGRES_DB: outis_radar_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U radar" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway CI database; not a secret.
+      DATABASE_URL: postgresql://radar:radar@localhost:5432/outis_radar_test
+      DIRECT_URL: postgresql://radar:radar@localhost:5432/outis_radar_test
+      DATABASE_URL_TEST: postgresql://radar:radar@localhost:5432/outis_radar_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages
+      - run: npm run test:db
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build -w @outis/worker -w @outis/bot -w @outis/api -w @outis/web

@@ -1,0 +1,111 @@
+# Scheduled jobs — the deployed setup has no always-on server, so this IS the
+# backend's clock. Three parallel jobs per trigger:
+#   discovery  GeckoTerminal/DEX Screener scan (+ launchpad tags, scores, signals)
+#   risk       GoPlus contract/holder checks
+#   followups  wallet sync → signal & paper evaluation → Telegram alerts
+# They use different providers, so running side by side does not eat into any
+# one rate budget. Overlaps are prevented twice: each job's `concurrency`
+# group, and a JobLease row in the database (which also covers a local worker).
+#
+# COST: Actions minutes are free and unlimited only for PUBLIC repositories.
+# A private repo gets 2,000 min/month on the free plan. Each trigger bills
+# three jobs (~5-7 min each with install), so:
+#   every 15 min  ≈ 55,000 min/month   public repo only
+#   every 2 hours ≈  7,000 min/month   still over — use every 6 hours (≈2,300) or go public
+# For a private repo, set the cron below accordingly, or run the worker on a
+# machine you own:  npm run scan -- all --loop 600
+#
+# Repository secrets (Settings → Secrets and variables → Actions → Secrets):
+#   DATABASE_URL, DIRECT_URL                   required
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS   optional, for alerts
+#   RPC_URL_<CHAIN>                            optional, for wallet tracking
+# Repository variables (… → Variables): SCAN_CHAINS, DASHBOARD_URL (both optional).
+name: scheduled-scans
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+jobs:
+  discovery:
+    concurrency:
+      group: discovery-scan
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    # Must exceed SCAN_MAX_DURATION_MS plus install time, so the scan always
+    # ends on its own deadline and releases its lease rather than being killed.
+    timeout-minutes: 14
+    env:
+      SCAN_CHAINS: ${{ vars.SCAN_CHAINS }}
+      SCAN_MAX_DURATION_MS: '420000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages && npm run build -w @outis/worker
+      - name: Discovery scan
+        run: node apps/worker/dist/main.js discovery
+
+  risk:
+    concurrency:
+      group: risk-scan
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      RISK_CHECKS_PER_RUN: '30'
+      RISK_MAX_DURATION_MS: '420000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages && npm run build -w @outis/worker
+      - name: Risk checks
+        run: node apps/worker/dist/main.js risk
+
+  followups:
+    concurrency:
+      group: followups
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      RPC_URL_SOLANA: ${{ secrets.RPC_URL_SOLANA }}
+      RPC_URL_BASE: ${{ secrets.RPC_URL_BASE }}
+      RPC_URL_ETHEREUM: ${{ secrets.RPC_URL_ETHEREUM }}
+      RPC_URL_BSC: ${{ secrets.RPC_URL_BSC }}
+      RPC_URL_ARBITRUM: ${{ secrets.RPC_URL_ARBITRUM }}
+      RPC_URL_ROBINHOOD: ${{ secrets.RPC_URL_ROBINHOOD }}
+      RPC_URL_POLYGON: ${{ secrets.RPC_URL_POLYGON }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+      DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+      ALERT_ONCE_SECONDS: '180'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages && npm run build -w @outis/worker -w @outis/bot
+      # Each step runs even if the one before failed: a broken wallet RPC must not stop alerts.
+      - name: Wallet sync
+        run: node apps/worker/dist/main.js wallets
+      - name: Signal & paper evaluation
+        if: ${{ !cancelled() }}
+        run: node apps/worker/dist/main.js evaluate
+      - name: Telegram alerts
+        if: ${{ !cancelled() }}
+        run: node apps/bot/dist/main.js --once
