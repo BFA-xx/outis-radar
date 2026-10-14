@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="sweep" x1="32" y1="32" x2="54" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5EF0B4" stop-opacity=".05"/>
+      <stop offset="1" stop-color="#5EF0B4" stop-opacity=".6"/>
+    </linearGradient>
+  </defs>
+  <!-- outer ring: the O of OUTIS, open where the sweep leaves it -->
+  <path d="M32 6 A26 26 0 1 0 54.52 19" stroke="#5EF0B4" stroke-width="4.2" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="15" stroke="#5EF0B4" stroke-opacity=".38" stroke-width="2"/>
+  <!-- sweep from 12 to 2 o'clock -->
+  <path d="M32 32 L32 6 A26 26 0 0 1 54.52 19 Z" fill="url(#sweep)"/>
+  <path d="M32 32 L54.52 19" stroke="#5EF0B4" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="3.6" fill="#5EF0B4"/>
+  <!-- the find -->
+  <circle cx="44.6" cy="17.4" r="6.2" fill="#5EF0B4" fill-opacity=".18"/>
+  <circle cx="44.6" cy="17.4" r="3.1" fill="#EFFFF8"/>
+</svg>

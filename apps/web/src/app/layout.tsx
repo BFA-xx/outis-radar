@@ -16,13 +16,21 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { themeColor: '#070708' };
 
 function Mark() {
+  // Same geometry as brand/mark.svg: the open O ring, the sweep, the find.
   return (
-    <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden>
-      <circle cx="12" cy="12" r="10.5" fill="none" stroke="currentColor" strokeOpacity=".25" />
-      <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" strokeOpacity=".4" />
-      <path d="M12 12 L12 1.5 A10.5 10.5 0 0 1 21.6 7.7 Z" fill="currentColor" fillOpacity=".35" />
-      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
-      <circle cx="17" cy="6.5" r="1.1" fill="currentColor" />
+    <svg viewBox="0 0 64 64" className="h-7 w-7" fill="none" aria-hidden>
+      <defs>
+        <linearGradient id="mark-sweep" x1="32" y1="32" x2="54" y2="8" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="currentColor" stopOpacity=".05" />
+          <stop offset="1" stopColor="currentColor" stopOpacity=".6" />
+        </linearGradient>
+      </defs>
+      <path d="M32 6 A26 26 0 1 0 54.52 19" stroke="currentColor" strokeWidth="4.6" strokeLinecap="round" />
+      <circle cx="32" cy="32" r="15" stroke="currentColor" strokeOpacity=".38" strokeWidth="2.2" />
+      <path d="M32 32 L32 6 A26 26 0 0 1 54.52 19 Z" fill="url(#mark-sweep)" />
+      <path d="M32 32 L54.52 19" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" />
+      <circle cx="32" cy="32" r="4" fill="currentColor" />
+      <circle cx="44.6" cy="17.4" r="3.6" fill="#EFFFF8" />
     </svg>
   );
 }

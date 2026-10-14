@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#121a17"/>
+      <stop offset=".6" stop-color="#090c0b"/>
+      <stop offset="1" stop-color="#040505"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#5EF0B4" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#5EF0B4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="640" height="640" fill="url(#bg)"/>
+  <circle cx="320" cy="320" r="250" fill="url(#halo)"/>
+  <!-- faint outer grid ring, inside Telegram's circular crop -->
+  <circle cx="320" cy="320" r="268" fill="none" stroke="#5EF0B4" stroke-opacity=".08" stroke-width="2"/>
+  <g transform="translate(320 320) scale(6.2) translate(-32 -32)" filter="url(#glow)">
+    <use href="#m"/>
+  </g>
+  <defs>
+    <linearGradient id="sweep" x1="32" y1="32" x2="54" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5EF0B4" stop-opacity=".05"/>
+      <stop offset="1" stop-color="#5EF0B4" stop-opacity=".6"/>
+    </linearGradient>
+    <g id="m" fill="none">
+      <path d="M32 6 A26 26 0 1 0 54.52 19" stroke="#5EF0B4" stroke-width="4.2" stroke-linecap="round"/>
+      <circle cx="32" cy="32" r="15" stroke="#5EF0B4" stroke-opacity=".38" stroke-width="2"/>
+      <path d="M32 32 L32 6 A26 26 0 0 1 54.52 19 Z" fill="url(#sweep)"/>
+      <path d="M32 32 L54.52 19" stroke="#5EF0B4" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="32" cy="32" r="3.6" fill="#5EF0B4"/>
+      <circle cx="44.6" cy="17.4" r="6.2" fill="#5EF0B4" fill-opacity=".18"/>
+      <circle cx="44.6" cy="17.4" r="3.1" fill="#EFFFF8"/>
+    </g>
+  </defs>
+</svg>
