@@ -57,6 +57,7 @@ const config: ScanConfig = {
   refreshLimit: 50,
   maxDurationMs: 60_000,
   snapshotRetentionDays: 3650,
+  tokenRetentionDays: 3650,
 };
 const quiet = createLogger('test', () => {});
 const noSleep = async () => {};

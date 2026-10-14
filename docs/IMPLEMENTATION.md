@@ -205,6 +205,9 @@ are unknown on EVM; positions bought before tracking started show as incomplete;
 - [x] Monitoring: Settings page (secrets present/missing — never values, last good run per job, alert counts);
       one "scans have stopped" Telegram warning per stall
 - [x] `npm run secrets` prints fresh values locally; `docs/DEPLOY.md` is the step-by-step
+- [x] Token cleanup for the 500 MB free database: tokens first seen > 14 days ago (`TOKEN_RETENTION_DAYS`)
+      with no market update for 7 days are deleted with their pairs/snapshots/assessments — never one that is
+      watched, signalled, paper-traded or in a tracked wallet's transfers. ≤ 2,000 per scan
 - [ ] Not deployed yet — needs your Supabase / Vercel / GitHub accounts (docs/DEPLOY.md)
 
 ### Milestone 6 — more chains

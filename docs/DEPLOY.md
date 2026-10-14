@@ -99,6 +99,6 @@ delivers alerts and does not poll; `--delete-webhook` switches back.
 
 | Service | Free tier limit that matters | What happens at the limit |
 |---|---|---|
-| Supabase | 500 MB database; pauses after 7 days with no activity | Snapshots are pruned after 14 days (`SNAPSHOT_RETENTION_DAYS`); scheduled scans keep it active |
+| Supabase | 500 MB database; pauses after 7 days with no activity | Snapshots pruned after 14 days, dead tokens after 14 (`TOKEN_RETENTION_DAYS`); scheduled scans keep it active |
 | Vercel Hobby | non-commercial use; function time per month | Dashboard + API are a few requests per page view |
 | GitHub Actions | public repo: unlimited; private: 2,000 min/month | See step 1 |

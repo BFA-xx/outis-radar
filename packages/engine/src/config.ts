@@ -12,6 +12,7 @@ export const scanConfigSchema = z.object({
   SCAN_REFRESH_LIMIT: intFromEnv(150, 0, 3_000),
   SCAN_MAX_DURATION_MS: intFromEnv(420_000, 10_000, 3_600_000),
   SNAPSHOT_RETENTION_DAYS: intFromEnv(14, 1, 365),
+  TOKEN_RETENTION_DAYS: intFromEnv(14, 3, 365),
 });
 
 export interface ScanConfig {
@@ -22,6 +23,7 @@ export interface ScanConfig {
   refreshLimit: number;
   maxDurationMs: number;
   snapshotRetentionDays: number;
+  tokenRetentionDays: number;
 }
 
 /** Parse scan configuration from env. Throws with every problem listed, not just the first. */
@@ -49,6 +51,7 @@ export function loadScanConfig(env: Record<string, string | undefined> = process
     refreshLimit: e.SCAN_REFRESH_LIMIT,
     maxDurationMs: e.SCAN_MAX_DURATION_MS,
     snapshotRetentionDays: e.SNAPSHOT_RETENTION_DAYS,
+    tokenRetentionDays: e.TOKEN_RETENTION_DAYS,
   };
 }
 

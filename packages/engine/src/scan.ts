@@ -28,6 +28,7 @@ import {
   flushProviderHealth,
   persistMergedPairs,
   pruneSnapshots,
+  pruneTokens,
   recomputePrimaryPairs,
   syncChains,
   type PersistStats,
@@ -64,6 +65,7 @@ export interface ScanResult {
   status: 'ok' | 'partial' | 'failed' | 'skipped';
   chains: Record<string, ChainScanStats>;
   snapshotsPruned: number;
+  tokensPruned: number;
   assessed: number;
   durationMs: number;
   stoppedEarly: string | null;
@@ -92,6 +94,7 @@ export async function runDiscoveryScan(deps: ScanDeps): Promise<ScanResult> {
     status: 'ok',
     chains: {},
     snapshotsPruned: 0,
+    tokensPruned: 0,
     assessed: 0,
     durationMs: 0,
     stoppedEarly: null,
@@ -278,6 +281,7 @@ export async function runDiscoveryScan(deps: ScanDeps): Promise<ScanResult> {
 
     if (!outOfTime('pruning')) {
       result.snapshotsPruned = await pruneSnapshots(prisma, config.snapshotRetentionDays);
+      result.tokensPruned = await pruneTokens(prisma, config.tokenRetentionDays);
     }
 
     const providerErrors = Object.values(result.chains).reduce((n, c) => n + c.providerErrors.length, 0);
@@ -305,6 +309,7 @@ export async function runDiscoveryScan(deps: ScanDeps): Promise<ScanResult> {
             JSON.stringify({
               chains: result.chains,
               snapshotsPruned: result.snapshotsPruned,
+              tokensPruned: result.tokensPruned,
               assessed: result.assessed,
               durationMs: result.durationMs,
               stoppedEarly: result.stoppedEarly,

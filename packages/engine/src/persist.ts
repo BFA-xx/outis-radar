@@ -349,6 +349,31 @@ export async function recomputePrimaryPairs(prisma: PrismaClient, tokenIds: stri
        AND p."isPrimary" IS DISTINCT FROM (p.id = best.id)`;
 }
 
+/** Max tokens deleted per scan, so one run never stalls on a huge backlog. */
+export const TOKEN_PRUNE_BATCH = 2000;
+
+/**
+ * Delete tokens nobody needs any more: first seen more than `retentionDays`
+ * ago, no market update for 7 days, and not referenced by anything the user
+ * cares about — a watchlist, a signal, a paper trade, or a tracked wallet's
+ * transfers. Pairs, snapshots, checks and assessments go with them (cascade).
+ */
+export async function pruneTokens(prisma: PrismaClient, retentionDays: number, now = new Date()): Promise<number> {
+  const seenBefore = new Date(now.getTime() - retentionDays * 24 * 60 * 60_000);
+  const quietSince = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
+  return prisma.$executeRaw`
+    DELETE FROM "Token" WHERE id IN (
+      SELECT t.id FROM "Token" t
+       WHERE t."firstSeenAt" < ${seenBefore}
+         AND NOT EXISTS (SELECT 1 FROM "Pair" p WHERE p."baseTokenId" = t.id AND p."marketUpdatedAt" >= ${quietSince})
+         AND NOT EXISTS (SELECT 1 FROM "WatchlistItem" w WHERE w.kind = 'token' AND w."chainId" = t."chainId" AND w.address = t.address)
+         AND NOT EXISTS (SELECT 1 FROM "Signal" s WHERE s."tokenId" = t.id)
+         AND NOT EXISTS (SELECT 1 FROM "PaperTrade" pt WHERE pt."tokenId" = t.id)
+         AND NOT EXISTS (SELECT 1 FROM "WalletTransfer" wt WHERE wt."chainId" = t."chainId" AND wt."tokenAddress" = t.address)
+       LIMIT ${TOKEN_PRUNE_BATCH}
+    )`;
+}
+
 export async function pruneSnapshots(prisma: PrismaClient, retentionDays: number, now = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60_000);
   const res = await prisma.marketSnapshot.deleteMany({ where: { observedAt: { lt: cutoff } } });
