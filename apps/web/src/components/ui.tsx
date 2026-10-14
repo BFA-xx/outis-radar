@@ -93,7 +93,7 @@ export function ApiDown({ message }: { message: string }) {
       <p className="mt-1 text-muted">
         {message.replace(/[.\s]+$/, '')}. Nothing is shown rather than stale or sample data.{' '}
         {process.env.VERCEL === '1' ? (
-          <>The Settings page and the API project&apos;s logs on Vercel show what is missing.</>
+          <>The API project&apos;s logs on Vercel show what is missing.</>
         ) : (
           <>
             Start everything with <code className="num text-ink">npm start</code>.
