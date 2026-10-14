@@ -22,7 +22,7 @@ export class TelegramController {
   private getBot(token: string): Promise<Bot> {
     // One bot per warm instance; init() fetches getMe once.
     this.bot ??= (async () => {
-      const bot = createBot(token, { prisma: this.prisma, allowedUserIds: allowedUserIdsFromEnv() });
+      const bot = createBot(token, { prisma: this.prisma, allowedUserIds: allowedUserIdsFromEnv(), dashboardUrl: process.env.DASHBOARD_URL?.trim() || null });
       await bot.init();
       return bot;
     })().catch((err) => {

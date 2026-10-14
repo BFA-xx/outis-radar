@@ -55,7 +55,7 @@ async function main() {
   const interval = Math.max(20, Number(process.env.ALERT_INTERVAL_SECONDS ?? 60)) * 1000;
 
   const prisma = getPrisma();
-  const bot = createBot(token, { prisma, allowedUserIds: allowed });
+  const bot = createBot(token, { prisma, allowedUserIds: allowed, dashboardUrl });
   const send = telegramSender(bot);
   const holder = `bot-${randomUUID().slice(0, 8)}`;
 

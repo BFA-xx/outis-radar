@@ -56,6 +56,30 @@ describe.skipIf(!url)('bot handlers', () => {
     expect(await prisma.telegramSubscriber.count()).toBe(0);
   });
 
+  it('a pasted contract address gets a token card; other text gets guidance', async () => {
+    const bot = makeBot();
+    await bot.handleUpdate(msg('/start'));
+    await prisma.$executeRawUnsafe('TRUNCATE "Pair", "Token" CASCADE');
+    const t = await prisma.token.create({
+      data: { chainId: 'solana', address: 'CardMint1111111111111111111111111pump', symbol: 'CARD', name: 'Card Token', firstSeenSource: 'test', launchpad: 'pumpfun', launchpadStage: 'curve', launchpadEvidence: 'dex', contractCheckedAt: new Date(), riskScore: 12, riskLevel: 'no_major_flags', riskCoverage: 0.7 },
+    });
+    // Fresh market data and a recent contract check: answered from the database, no network.
+    await prisma.pair.create({ data: { chainId: 'solana', address: 'card-pair', baseTokenId: t.id, quoteTokenAddress: 'So11111111111111111111111111111111111111112', isPrimary: true, priceUsd: 0.0012, liquidityUsd: 30_000, marketUpdatedAt: new Date(), pairCreatedAt: new Date(Date.now() - 90 * 60_000) } });
+    replies.length = 0;
+    await bot.handleUpdate(msg('what about CardMint1111111111111111111111111pump ?'));
+    expect(replies[0].text).toContain('Looking it up');
+    const card = replies.find((r) => r.method === 'editMessageText')?.text ?? '';
+    expect(card).toContain('CARD');
+    expect(card).toContain('pump.fun');
+    expect(card).toContain('Risk 12');
+    expect(card).toContain('Research only');
+    replies.length = 0;
+    await bot.handleUpdate(msg('gm'));
+    expect(last()).toMatch(/contract address/);
+    await bot.handleUpdate(msg('/nonsense'));
+    expect(last()).toMatch(/Unknown command/);
+  });
+
   it('refuses group chats', async () => {
     const bot = makeBot();
     await bot.handleUpdate(msg('/start', OWNER, 'group'));

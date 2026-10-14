@@ -78,5 +78,6 @@ export const REASON_LABEL: Record<string, string> = {
   token_boost: 'paid boost',
   community_takeover: 'CTO',
   wallet_activity: 'tracked wallet',
+  lookup: 'searched',
   refresh: 'refresh',
 };

@@ -1,4 +1,6 @@
 import { Controller, Get, Inject, NotFoundException, Param, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { lookupToken } from '@outis/engine';
 import type { PrismaClient } from '@outis/db';
 import {
   type DiscoveryQuery,
@@ -17,6 +19,8 @@ const tokenParams = z.object({
   chain: z.string().refine((c) => Boolean(getChain(c)), 'Unknown chain id'),
   address: z.string().min(1).max(200),
 });
+
+const lookupQuery = z.object({ q: z.string().trim().min(1).max(300) });
 
 const historyQuery = z.object({
   hours: z.coerce.number().int().min(1).max(24 * 14).default(24),
@@ -42,6 +46,45 @@ export class DiscoveryController {
       }),
     ]);
     return { items: rows.map((r) => toFeedItem(r, now)), page: q.page, pageSize: q.pageSize, total };
+  }
+
+  /**
+   * Find a token by contract address (or a DEX Screener link). Unknown or
+   * stale tokens are fetched live, stored and checked — so it is limited
+   * more tightly than plain reads.
+   */
+  @Get('lookup')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async lookup(@Query(new ZodPipe(lookupQuery)) q: z.infer<typeof lookupQuery>) {
+    const r = await lookupToken(this.prisma, q.q);
+    const tokens = r.hits.length
+      ? await this.prisma.token.findMany({ where: { id: { in: r.hits.map((h) => h.tokenId) } }, include: { pairs: { where: { isPrimary: true }, take: 1 } } })
+      : [];
+    const byId = new Map(tokens.map((t) => [t.id, t]));
+    return {
+      query: r.query,
+      invalid: r.invalid,
+      fetched: r.fetched,
+      resolvedFrom: r.resolvedFrom ?? null,
+      providerProblem: r.hits.length === 0 && r.errors.length > 0,
+      hits: r.hits.map((h) => {
+        const t = byId.get(h.tokenId)!;
+        const p = t.pairs[0];
+        return {
+          chainId: h.chainId,
+          chainName: getChain(h.chainId)?.displayName ?? h.chainId,
+          address: h.address,
+          symbol: t.symbol,
+          name: t.name,
+          imageUrl: t.imageUrl,
+          liquidityUsd: p?.liquidityUsd ?? null,
+          marketCapUsd: p?.marketCapUsd ?? p?.fdvUsd ?? null,
+          riskScore: t.riskScore,
+          riskLevel: t.riskLevel,
+          riskCoverage: t.riskCoverage,
+        };
+      }),
+    };
   }
 
   @Get('tokens/:chain/:address')

@@ -283,6 +283,35 @@ async function storeChecks(prisma: PrismaClient, tokenId: string, results: Check
   );
 }
 
+/**
+ * One token's contract/holder checks via GoPlus, stored, with the next check
+ * scheduled. Shared by the risk job and on-demand lookups.
+ */
+export async function checkContract(
+  prisma: PrismaClient,
+  goplus: GoPlusProvider,
+  t: { id: string; chainId: string; address: string; pairs: Array<{ address: string }> },
+  cfg: Pick<RiskJobConfig, 'recheckHours' | 'notIndexedRetryMinutes'>,
+  clock: () => Date = () => new Date(),
+): Promise<{ kind: 'ok' } | { kind: 'not_indexed' } | { kind: 'unsupported' } | { kind: 'error'; message: string }> {
+  const chain = getChain(t.chainId);
+  if (!chain || !goplusChainId(chain)) return { kind: 'unsupported' };
+  const lookup = await goplus.tokenSecurity(chain, t.address);
+  const at = clock();
+  let next: Date;
+  if (lookup.kind === 'ok') {
+    const results = chain.family === 'solana' ? solanaChecksFromGoPlus(lookup.record, at) : evmChecksFromGoPlus(lookup.record, t.pairs.map((p) => p.address), at);
+    await storeChecks(prisma, t.id, results);
+    next = new Date(at.getTime() + cfg.recheckHours * 60 * 60_000);
+  } else {
+    next = new Date(at.getTime() + cfg.notIndexedRetryMinutes * 60_000);
+  }
+  await prisma.token.update({ where: { id: t.id }, data: { contractCheckedAt: at, contractNextCheckAt: next } });
+  if (lookup.kind === 'ok') return { kind: 'ok' };
+  if (lookup.kind === 'not_indexed') return { kind: 'not_indexed' };
+  return { kind: 'error', message: lookup.kind === 'error' ? lookup.message : String(lookup.kind) };
+}
+
 export async function runRiskJob(deps: RiskJobDeps): Promise<RiskJobResult> {
   const cfg = { ...DEFAULT_RISK_JOB, ...deps.config };
   const { prisma, logger } = deps;
@@ -343,23 +372,10 @@ export async function runRiskJob(deps: RiskJobDeps): Promise<RiskJobResult> {
         result.stoppedEarly = 'deadline reached';
         break;
       }
-      const chain = getChain(t.chainId)!;
-      const lookup = await goplus.tokenSecurity(chain, t.address);
-      const at = clock();
-      let next: Date;
-      if (lookup.kind === 'ok') {
-        const results = chain.family === 'solana' ? solanaChecksFromGoPlus(lookup.record, at) : evmChecksFromGoPlus(lookup.record, t.pairs.map((p) => p.address), at);
-        await storeChecks(prisma, t.id, results);
-        result.checked++;
-        next = new Date(at.getTime() + cfg.recheckHours * 60 * 60_000);
-      } else if (lookup.kind === 'not_indexed') {
-        result.notIndexed++;
-        next = new Date(at.getTime() + cfg.notIndexedRetryMinutes * 60_000);
-      } else {
-        if (lookup.kind === 'error' && result.errors.length < 10) result.errors.push(`${t.chainId}:${t.address}: ${lookup.message}`);
-        next = new Date(at.getTime() + cfg.notIndexedRetryMinutes * 60_000);
-      }
-      await prisma.token.update({ where: { id: t.id }, data: { contractCheckedAt: at, contractNextCheckAt: next } });
+      const lookup = await checkContract(prisma, goplus, t, cfg, clock);
+      if (lookup.kind === 'ok') result.checked++;
+      else if (lookup.kind === 'not_indexed') result.notIndexed++;
+      else if (lookup.kind === 'error' && result.errors.length < 10) result.errors.push(`${t.chainId}:${t.address}: ${lookup.message}`);
       assessed.push(t.id);
       if (assessed.length % 10 === 0) await renewLease(prisma, RISK_JOB, holder, leaseTtl);
     }

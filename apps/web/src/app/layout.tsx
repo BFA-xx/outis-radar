@@ -44,7 +44,20 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </span>
             </Link>
             <Nav />
+            <form action="/search" className="hidden shrink-0 md:block" role="search">
+              <input
+                name="q"
+                placeholder="Paste a contract address…"
+                aria-label="Search by contract address"
+                autoComplete="off"
+                spellCheck={false}
+                className="field h-9 w-64 px-3 text-sm xl:w-80"
+              />
+            </form>
           </div>
+          <form action="/search" className="px-4 pb-3 md:hidden" role="search">
+            <input name="q" placeholder="Paste a contract address…" aria-label="Search by contract address" autoComplete="off" spellCheck={false} className="field h-9 w-full px-3 text-sm" />
+          </form>
         </header>
         <main className="mx-auto max-w-[1520px] px-4 py-7 sm:px-6">{children}</main>
         <footer className="mx-auto max-w-[1520px] px-4 pb-10 text-xs text-faint sm:px-6">

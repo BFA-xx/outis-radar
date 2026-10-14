@@ -231,6 +231,27 @@ export class DexScreenerProvider {
     );
   }
 
+  /**
+   * Every pool for one address, on any chain: as a token first
+   * (`/latest/dex/tokens`), then as a pool address via search.
+   */
+  async searchToken(address: string, chains: ChainSpec[]): Promise<ProviderResult<PairObservation[]>> {
+    const result: ProviderResult<PairObservation[]> = { data: [], malformed: 0, errors: [] };
+    for (const path of [`/latest/dex/tokens/${encodeURIComponent(address)}`, `/latest/dex/search?q=${encodeURIComponent(address)}`]) {
+      try {
+        const body = await this.get(this.baseUrl + path, this.dataLimiter, '*');
+        const r = normalizeDexScreenerPairs(body, this.ctx.now?.() ?? new Date(), 'refresh', chains);
+        result.malformed += r.malformed;
+        result.errors.push(...r.errors);
+        result.data.push(...r.data);
+        if (r.data.length > 0) break;
+      } catch (err) {
+        result.errors.push((err as Error).message);
+      }
+    }
+    return result;
+  }
+
   /** Current market data for known pairs, batched 30 per call. */
   async refreshPairs(chain: ChainSpec, pairAddresses: string[]): Promise<ProviderResult<PairObservation[]>> {
     return this.batched(

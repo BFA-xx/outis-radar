@@ -10,7 +10,7 @@
 import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { type Prisma, type PrismaClient } from '@outis/db';
-import { esc, type Sender } from '@outis/engine';
+import { esc, extractAddress, lookupToken, tokenCard, type Sender } from '@outis/engine';
 import {
   ALERT_KINDS,
   type AlertKind,
@@ -30,6 +30,8 @@ import {
 export interface BotDeps {
   prisma: PrismaClient;
   allowedUserIds: Set<string>;
+  /** Public dashboard URL for links in cards. */
+  dashboardUrl?: string | null;
   /** For tests: skip getMe. */
   botInfo?: UserFromGetMe;
 }
@@ -44,6 +46,8 @@ const KIND_LABEL: Record<AlertKind, string> = {
 
 const HELP = [
   '<b>OUTIS RADAR alerts</b>',
+  '',
+  '<b>Paste any contract address</b> (or a DEX Screener link) to get a token check.',
   '',
   '/prefs — your settings, with on/off switches',
   '/set &lt;key&gt; &lt;value&gt; — e.g. <code>/set minliq 50k</code>',
@@ -62,6 +66,7 @@ const HELP = [
 
 /** The command menu Telegram shows. */
 export const BOT_COMMANDS = [
+  { command: 'check', description: 'Check a token by contract address' },
   { command: 'prefs', description: 'Your alert settings' },
   { command: 'set', description: 'Change a threshold' },
   { command: 'chains', description: 'Limit alerts to chains' },
@@ -299,12 +304,46 @@ export function createBot(token: string, deps: BotDeps): Bot {
     const s = await needSub(ctx);
     if (!s) return;
     await prisma.alertEvent.create({
-      data: { subscriberId: s.id, kind: 'discovery', dedupKey: `test:${Date.now()}`, text: '🧪 <b>TEST ALERT</b>\nIf you can read this, delivery works. Real alerts look the same, with live data.', status: 'pending' },
+      data: { subscriberId: s.id, kind: 'discovery', dedupKey: `test:${Date.now()}`, text: '🧪 <b>TEST ALERT</b>\nIf you can read this, scheduled delivery works. Real alerts look the same, with live data.', status: 'pending' },
     });
-    await ctx.reply('Queued a test alert — it arrives within a minute.');
+    await ctx.reply('Queued a test alert. It arrives with the next alert run (within a minute locally, up to 15 min when deployed).');
   });
 
-  bot.on('message:text', (ctx) => ctx.reply('Unknown command. /help lists them.'));
+  // ── Paste a contract address (or a DEX Screener / pump.fun link) → token card ──
+  const recentLookups = new Map<number, number[]>();
+  const lookupReply = async (ctx: Context, text: string) => {
+    const uid = ctx.from!.id;
+    const now = Date.now();
+    const recent = (recentLookups.get(uid) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= 10) return ctx.reply('Slow down a little — 10 lookups a minute.');
+    recentLookups.set(uid, [...recent, now]);
+    const note = await ctx.reply('🔎 Looking it up…');
+    const r = await lookupToken(prisma, text, { contractChecks: true });
+    const edit = (html: string) =>
+      ctx.api.editMessageText(ctx.chat!.id, note.message_id, html, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }).catch(() => ctx.reply(html, { parse_mode: 'HTML' }));
+    if (r.hits.length === 0) {
+      return edit(
+        r.errors.length
+          ? 'Could not reach the data providers just now — try again in a minute.'
+          : 'No trading pool found for that address on any chain we cover. It may not be trading yet, or it is a wallet rather than a token.',
+      );
+    }
+    const card = await tokenCard(prisma, r.hits[0].tokenId, { dashboardUrl: deps.dashboardUrl, otherChains: r.hits.slice(1).map((h) => h.chainId) });
+    return edit(card ?? 'Found it, but could not build the card.');
+  };
+
+  bot.command('check', async (ctx) => {
+    const arg = ctx.match.trim();
+    if (!extractAddress(arg) && !/dexscreener\.com\//i.test(arg)) return ctx.reply('Usage: /check <contract address>  — or just paste the address.');
+    await lookupReply(ctx, arg);
+  });
+
+  bot.on('message:text', async (ctx) => {
+    const text = ctx.message.text;
+    if (text.startsWith('/')) return ctx.reply('Unknown command. /help lists them.');
+    if (extractAddress(text) || /dexscreener\.com\//i.test(text)) return lookupReply(ctx, text);
+    return ctx.reply('Paste a token contract address (or a DEX Screener link) and I will look it up. /help lists the commands.');
+  });
 
   bot.catch((err) => {
     // Never log the update payload (it can contain user text) or the token.

@@ -38,6 +38,8 @@ export type DiscoveryReason =
   | 'community_takeover'
   /** Traded by a wallet the user tracks. */
   | 'wallet_activity'
+  /** Someone searched for it (website search or a CA pasted into the bot). */
+  | 'lookup'
   | 'refresh';
 
 export interface PairObservation {

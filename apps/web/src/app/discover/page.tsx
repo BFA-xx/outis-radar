@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { LAUNCHPADS } from '@outis/shared';
 import { AutoRefresh } from '@/components/auto-refresh';
 import { LaunchpadBadge } from '@/components/chart-embed';
@@ -58,6 +59,9 @@ function withParams(sp: SP, patch: Record<string, string | undefined>): string {
 
 export default async function DiscoverPage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
+  // A pasted contract address goes to the lookup, which also finds tokens the scanner has not seen.
+  const typed = one(sp, 'q')?.trim() ?? '';
+  if (/^0x[0-9a-fA-F]{40}$/.test(typed) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(typed)) redirect(`/search?q=${encodeURIComponent(typed)}`);
   const query = toApiQuery(sp);
   const [feed, chains] = await Promise.all([
     api<Paginated<FeedItem>>(`/tokens?${query.toString()}`),
