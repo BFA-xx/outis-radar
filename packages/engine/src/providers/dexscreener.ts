@@ -15,6 +15,7 @@ import {
   type ChainSpec,
   type DiscoveryReason,
   type PairObservation,
+  type TokenLinks,
   WINDOWS,
   chainByProviderId,
   emptyTxns,
@@ -51,11 +52,29 @@ const pairSchema = z
     fdv: z.unknown().optional(),
     marketCap: z.unknown().optional(),
     pairCreatedAt: z.unknown().optional(),
-    info: z.object({ imageUrl: z.string().nullish() }).passthrough().nullish(),
+    info: z
+      .object({
+        imageUrl: z.string().nullish(),
+        websites: z.array(z.object({ url: z.string() }).passthrough()).nullish(),
+        socials: z.array(z.object({ type: z.string().nullish(), url: z.string() }).passthrough()).nullish(),
+      })
+      .passthrough()
+      .nullish(),
   })
   .passthrough();
 
 const listingSchema = z.object({ chainId: z.string(), tokenAddress: z.string().min(1) }).passthrough();
+
+/** Only http(s) links — they end up as tappable links in Telegram and on the dashboard. */
+const safeUrl = (u: string | null | undefined) => (u && /^https?:\/\/[^\s<>"']+$/i.test(u) ? u : undefined);
+
+function dsLinks(info: { websites?: Array<{ url: string }> | null; socials?: Array<{ type?: string | null; url: string }> | null } | null | undefined): TokenLinks | null {
+  if (!info) return null;
+  const social = (t: string) => safeUrl(info.socials?.find((s) => s.type?.toLowerCase() === t)?.url);
+  const links: TokenLinks = { website: safeUrl(info.websites?.[0]?.url), twitter: social('twitter') ?? social('x'), telegram: social('telegram') };
+  for (const k of Object.keys(links) as Array<keyof TokenLinks>) if (!links[k]) delete links[k];
+  return Object.keys(links).length ? links : null;
+}
 
 export function normalizeDexScreenerPairs(
   body: unknown,
@@ -108,6 +127,7 @@ export function normalizeDexScreenerPairs(
         name: str(p.baseToken.name),
         decimals: null,
         imageUrl: str(p.info?.imageUrl),
+        links: dsLinks(p.info),
       },
       quoteToken: {
         address: normalizeAddress(chain, p.quoteToken.address),

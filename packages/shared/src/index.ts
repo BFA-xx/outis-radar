@@ -7,3 +7,4 @@ export * from './momentum';
 export * from './wallets';
 export * from './alerts';
 export * from './launchpads';
+export * from './alpha';

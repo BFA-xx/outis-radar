@@ -26,6 +26,14 @@ export interface TokenRef {
   name: string | null;
   decimals: number | null;
   imageUrl: string | null;
+  /** Project links, when the source reports them (DEX Screener token info). */
+  links?: TokenLinks | null;
+}
+
+export interface TokenLinks {
+  website?: string;
+  twitter?: string;
+  telegram?: string;
 }
 
 export type ProviderId = 'geckoterminal' | 'dexscreener';

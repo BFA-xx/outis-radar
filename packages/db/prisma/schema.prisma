@@ -71,6 +71,16 @@ model Token {
   /// indexed the token yet, later once it has answered.
   contractNextCheckAt DateTime?
 
+  /// 0–100 confluence score for "worth attention right now" (see @outis/shared alpha.ts).
+  alphaScore        Int?
+  /// alpha | watch | none
+  alphaTier         String?
+  /// { reasons, cautions, blockers } behind the score.
+  alphaDetail       Json?
+  alphaAt           DateTime?
+  /// Website / X / Telegram links as reported by DEX Screener: {website?, twitter?, telegram?}.
+  links             Json?
+
   // ── Launchpad origin (see @outis/shared launchpads.ts) ──────────────────
   /// Null = no evidence of a known launchpad, NOT proof it wasn't one.
   launchpad         String?
@@ -91,6 +101,7 @@ model Token {
   @@index([contractNextCheckAt])
   @@index([riskScore])
   @@index([launchpad])
+  @@index([alphaTier, alphaAt])
   @@index([graduatedAt])
   @@index([momentumScore])
 }
@@ -393,7 +404,7 @@ model TelegramSubscriber {
 model AlertEvent {
   id           String    @id @default(cuid())
   subscriberId String
-  /// discovery | risk | wallet | watch
+  /// alpha | discovery | launchpad | risk | wallet | watch | followup | recap | ops | summary
   kind         String
   dedupKey     String
   /// pending | sent | failed | suppressed
@@ -405,6 +416,10 @@ model AlertEvent {
   error        String?
   createdAt    DateTime  @default(now())
   sentAt       DateTime?
+  /// Telegram's id for the delivered message, so follow-ups can reply to it.
+  telegramMessageId BigInt?
+  /// Another event of this subscriber this one replies to (follow-ups).
+  replyToId    String?
 
   subscriber TelegramSubscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
 

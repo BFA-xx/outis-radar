@@ -6,13 +6,20 @@
 import type { PrismaClient } from '@outis/db';
 
 export type SendResult =
-  | { ok: true }
+  | { ok: true; messageId?: number }
   /** Temporary: try again later (rate limited, network). */
   | { ok: false; retryAfterMs?: number; permanent?: false; error: string }
   /** The chat is gone or blocked the bot: stop sending to it. */
   | { ok: false; permanent: true; error: string };
 
-export type Sender = (chatId: bigint, html: string) => Promise<SendResult>;
+export interface SendOptions {
+  /** Inline keyboard: rows of buttons, each a URL or callback data. */
+  buttons?: Array<Array<{ text: string; url?: string; data?: string }>>;
+  /** Telegram message id to reply under (follow-ups thread under their call). */
+  replyToMessageId?: number;
+}
+
+export type Sender = (chatId: bigint, html: string, opts?: SendOptions) => Promise<SendResult>;
 
 export interface DeliverStats {
   sent: number;
@@ -46,10 +53,18 @@ export async function deliverPending(
     const wait = (lastSentAt.get(ev.subscriberId) ?? 0) + PER_CHAT_GAP_MS - Date.now();
     if (wait > 0) await sleep(wait);
 
-    const r = await send(ev.subscriber.chatId, ev.text);
+    const buttons = (ev.payload as { buttons?: SendOptions['buttons'] } | null)?.buttons;
+    const parent = ev.replyToId ? await prisma.alertEvent.findUnique({ where: { id: ev.replyToId }, select: { telegramMessageId: true } }) : null;
+    const r = await send(ev.subscriber.chatId, ev.text, {
+      buttons: Array.isArray(buttons) ? buttons : undefined,
+      replyToMessageId: parent?.telegramMessageId ? Number(parent.telegramMessageId) : undefined,
+    });
     lastSentAt.set(ev.subscriberId, Date.now());
     if (r.ok) {
-      await prisma.alertEvent.update({ where: { id: ev.id }, data: { status: 'sent', sentAt: new Date(), attempts: { increment: 1 }, error: null } });
+      await prisma.alertEvent.update({
+        where: { id: ev.id },
+        data: { status: 'sent', sentAt: new Date(), attempts: { increment: 1 }, error: null, telegramMessageId: r.messageId !== undefined ? BigInt(r.messageId) : null },
+      });
       stats.sent++;
       continue;
     }

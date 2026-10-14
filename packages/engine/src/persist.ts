@@ -228,6 +228,7 @@ export async function persistMergedPairs(
           ...(m.baseToken.name !== null && { name: m.baseToken.name }),
           ...(m.baseToken.decimals !== null && { decimals: m.baseToken.decimals }),
           ...(m.baseToken.imageUrl !== null && { imageUrl: m.baseToken.imageUrl }),
+          ...(m.baseToken.links && Object.keys(m.baseToken.links).length > 0 && { links: m.baseToken.links as Prisma.InputJsonValue }),
         };
         const token = await tx.token.upsert({
           where: { chainId_address: { chainId: m.chainId, address: m.baseToken.address } },

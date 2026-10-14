@@ -20,8 +20,10 @@ import {
   DEFAULT_SCORING_CONFIG,
   checksFor,
   getChain,
+  getLaunchpad,
   goplusChainId,
   notChecked,
+  scoreAlpha,
   scoreMomentum,
   scoreRisk,
   scoringConfigSchema,
@@ -93,13 +95,13 @@ export async function assessTokens(
     const primaryIds = tokens.map((t) => t.pairs[0]?.id).filter((x): x is string => Boolean(x));
     const snaps = await prisma.marketSnapshot.findMany({
       where: { pairId: { in: primaryIds }, observedAt: { gte: since, lte: now } },
-      select: { pairId: true, observedAt: true, liquidityUsd: true },
+      select: { pairId: true, observedAt: true, liquidityUsd: true, priceUsd: true, txnsH1: true },
       orderBy: { observedAt: 'asc' },
     });
-    const snapsByPair = new Map<string, Array<{ at: Date; liquidityUsd: number | null }>>();
+    const snapsByPair = new Map<string, Array<{ at: Date; liquidityUsd: number | null; priceUsd: number | null; txnsH1: number | null }>>();
     for (const s of snaps) {
       const list = snapsByPair.get(s.pairId) ?? [];
-      list.push({ at: s.observedAt, liquidityUsd: s.liquidityUsd });
+      list.push({ at: s.observedAt, liquidityUsd: s.liquidityUsd, priceUsd: s.priceUsd, txnsH1: s.txnsH1 });
       snapsByPair.set(s.pairId, list);
     }
 
@@ -163,6 +165,35 @@ export async function assessTokens(
         config.momentum,
       );
 
+      // Alpha: confluence on top of momentum, compared with an observation 30–120 min ago.
+      const history = snapsByPair.get(pair.id) ?? [];
+      const earlierSnap = history
+        .map((h) => ({ ...h, minutesAgo: (now.getTime() - h.at.getTime()) / 60_000 }))
+        .filter((h) => h.minutesAgo >= 30 && h.minutesAgo <= 120)
+        .sort((a, b) => Math.abs(a.minutesAgo - 60) - Math.abs(b.minutesAgo - 60))[0];
+      const h1 = (pair.txns ?? {}) as Record<string, { buys?: number | null; sells?: number | null; buyers?: number | null } | undefined>;
+      const alpha = scoreAlpha({
+        momentumScore: momentum.score,
+        riskScore: risk.score,
+        riskCoverage: risk.coverage,
+        flagged: results.filter((r) => r.status === 'flagged').map((r) => ({ checkId: r.checkId, severity: r.severity, title: r.title })),
+        liquidityUsd: distrust ? null : pair.liquidityUsd,
+        ageMinutes: pair.pairCreatedAt ? (now.getTime() - pair.pairCreatedAt.getTime()) / 60_000 : null,
+        marketAgeMinutes: pair.marketUpdatedAt ? (now.getTime() - pair.marketUpdatedAt.getTime()) / 60_000 : null,
+        priceChangeM5: pair.priceChangeM5,
+        priceChangeH1: pair.priceChangeH1,
+        volumeM5: pair.volumeM5,
+        volumeH1: pair.volumeH1,
+        buysH1: h1.h1?.buys ?? null,
+        sellsH1: h1.h1?.sells ?? null,
+        buyersH1: h1.h1?.buyers ?? null,
+        earlier: earlierSnap ? { minutesAgo: earlierSnap.minutesAgo, priceUsd: earlierSnap.priceUsd, liquidityUsd: earlierSnap.liquidityUsd, txnsH1: earlierSnap.txnsH1 } : null,
+        liquidityNow: pair.liquidityUsd,
+        txnsH1: pair.txnsH1,
+        graduatedMinutesAgo: t.graduatedAt ? (now.getTime() - t.graduatedAt.getTime()) / 60_000 : null,
+        launchpadName: getLaunchpad(t.launchpad)?.name ?? null,
+      });
+
       const level = risk.incomplete ? `${risk.level}:incomplete` : risk.level;
       const flaggedIds = risk.flagged.map((f) => f.checkId).sort();
       const last = t.assessments[0];
@@ -186,6 +217,10 @@ export async function assessTokens(
             momentumScore: momentum.score,
             momentum: JSON.parse(JSON.stringify(momentum)) as Prisma.InputJsonValue,
             momentumAt: now,
+            alphaScore: alpha.score,
+            alphaTier: alpha.tier,
+            alphaDetail: { reasons: alpha.reasons, cautions: alpha.cautions, blockers: alpha.blockers },
+            alphaAt: now,
           },
         }),
         ...(changed
@@ -221,6 +256,8 @@ export async function assessTokens(
         riskScore: risk.score,
         riskCoverage: risk.coverage,
         graduatedMinutesAgo: t.graduatedAt ? (now.getTime() - t.graduatedAt.getTime()) / 60_000 : null,
+        alphaTier: alpha.tier,
+        alphaScore: alpha.score,
       });
     }
   }

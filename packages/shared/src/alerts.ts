@@ -8,11 +8,22 @@ import { z } from 'zod';
 import { CHAINS } from './chains';
 import { LAUNCHPADS } from './launchpads';
 
-export const ALERT_KINDS = ['discovery', 'launchpad', 'risk', 'wallet', 'watch'] as const;
+/**
+ * alpha     — the calls: alpha score ≥ minScore, clean contract, one per token
+ * sweep     — an hourly digest of "watch"-tier tokens (close, not yet a call)
+ * followup  — replies under a call when it hits 2×/5×/10×, or when it rugs
+ * recap     — once a day: every call of the last 24h and how it did
+ * discovery / launchpad — the raw feeds (every new token / every graduation); off by default
+ */
+export const ALERT_KINDS = ['alpha', 'sweep', 'followup', 'recap', 'risk', 'wallet', 'watch', 'discovery', 'launchpad'] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
 export const alertPrefsSchema = z.object({
   kinds: z.object({
+    alpha: z.boolean(),
+    sweep: z.boolean(),
+    followup: z.boolean(),
+    recap: z.boolean(),
     discovery: z.boolean(),
     launchpad: z.boolean(),
     risk: z.boolean(),
@@ -32,6 +43,14 @@ export const alertPrefsSchema = z.object({
     /** Also require at least this share of risk checks to have run. */
     minRiskCoverage: z.number().min(0).max(1),
   }),
+  alpha: z.object({
+    /** Calls need at least this alpha score (the engine's own bar is 70). */
+    minScore: z.number().min(55).max(100),
+  }),
+  /** Tokens this chat never wants to hear about again (token ids). */
+  mutedTokens: z.array(z.string().max(40)).max(500),
+  /** Hour (UTC) the daily recap is sent. */
+  recapHourUtc: z.number().int().min(0).max(23),
   /** Launchpad graduations: a token leaving its bonding curve for an open pool. */
   launchpad: z.object({
     /** Launchpad ids to alert on; empty = every known launchpad. */
@@ -56,7 +75,7 @@ export const alertPrefsSchema = z.object({
 export type AlertPrefs = z.infer<typeof alertPrefsSchema>;
 
 export const DEFAULT_ALERT_PREFS: AlertPrefs = {
-  kinds: { discovery: true, launchpad: true, risk: true, wallet: true, watch: true },
+  kinds: { alpha: true, sweep: true, followup: true, recap: true, discovery: false, launchpad: false, risk: true, wallet: true, watch: true },
   chains: [],
   discovery: {
     minLiquidityUsd: 20_000,
@@ -66,6 +85,9 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
     maxRisk: 44,
     minRiskCoverage: 0.6,
   },
+  alpha: { minScore: 70 },
+  mutedTokens: [],
+  recapHourUtc: 7,
   launchpad: { ids: [], minLiquidityUsd: 10_000, maxRisk: 69 },
   watch: { priceMovePct: 25 },
   wallet: { minNative: 0, minUsd: 0 },
@@ -74,6 +96,10 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
 
 /** Stored prefs merged over defaults; invalid stored values fall back rather than crash the bot. */
 export function readPrefs(stored: unknown): AlertPrefs {
+  // Prefs saved before alpha calls existed had the raw feeds on by default;
+  // upgrade them once to the new defaults (calls on, raw feeds off).
+  const kinds = (stored as { kinds?: Record<string, unknown> } | null)?.kinds;
+  if (kinds && !('alpha' in kinds)) stored = { ...(stored as object), kinds: { ...kinds, discovery: false, launchpad: false } };
   const merged = deepMerge(DEFAULT_ALERT_PREFS, stored);
   const parsed = alertPrefsSchema.safeParse(merged);
   return parsed.success ? parsed.data : DEFAULT_ALERT_PREFS;
@@ -145,6 +171,8 @@ export const PREF_SETTERS: Record<string, { path: [keyof AlertPrefs, string?]; l
   minmomentum: { path: ['discovery', 'minMomentum'], label: 'Min momentum (0–100)', parse: Number },
   maxrisk: { path: ['discovery', 'maxRisk'], label: 'Max risk (0–100)', parse: Number },
   coverage: { path: ['discovery', 'minRiskCoverage'], label: 'Min risk-check coverage (0–1)', parse: Number },
+  minalpha: { path: ['alpha', 'minScore'], label: 'Min alpha score for calls (55–100)', parse: Number },
+  recaphour: { path: ['recapHourUtc'], label: 'Daily recap hour (UTC, 0–23)', parse: (v) => Math.round(Number(v)) },
   gradliq: { path: ['launchpad', 'minLiquidityUsd'], label: 'Graduation alerts: min liquidity (USD)', parse: Number },
   gradrisk: { path: ['launchpad', 'maxRisk'], label: 'Graduation alerts: max known risk (0–100)', parse: Number },
   move: { path: ['watch', 'priceMovePct'], label: 'Watchlist move alert (% in 1h)', parse: Number },

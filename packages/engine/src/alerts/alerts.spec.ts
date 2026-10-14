@@ -36,7 +36,9 @@ describe.skipIf(!url)('alerts (Postgres)', () => {
     );
   });
 
-  async function sub(prefs = DEFAULT_ALERT_PREFS, chatId = 111n) {
+  // The raw feeds are opt-in since alpha calls; these tests exercise them.
+  const RAW = { ...DEFAULT_ALERT_PREFS, kinds: { ...DEFAULT_ALERT_PREFS.kinds, discovery: true, launchpad: true } };
+  async function sub(prefs = RAW, chatId = 111n) {
     return prisma.telegramSubscriber.create({ data: { chatId, prefs: prefs as object } });
   }
 
@@ -89,7 +91,7 @@ describe.skipIf(!url)('alerts (Postgres)', () => {
   });
 
   it('announces a fresh launchpad graduation once; old graduations and unselected launchpads stay quiet', async () => {
-    const prefs = { ...DEFAULT_ALERT_PREFS, kinds: { ...DEFAULT_ALERT_PREFS.kinds, discovery: false } };
+    const prefs = { ...RAW, kinds: { ...RAW.kinds, discovery: false } };
     await sub(prefs);
     await sub({ ...prefs, launchpad: { ...prefs.launchpad, ids: ['fourmeme'] } }, 222n);
     const grad = async (symbol: string, gradMinsAgo: number) => {
@@ -127,9 +129,50 @@ describe.skipIf(!url)('alerts (Postgres)', () => {
     expect(await prisma.alertEvent.count({ where: { kind: 'ops' } })).toBe(1);
   });
 
+  it('alpha: one call per token with a card and buttons; muted tokens stay silent; follow-ups reply under the call; recap scores it', async () => {
+    const a = await sub(DEFAULT_ALERT_PREFS, 1n);
+    const t = await token('ALPHA', { liq: 60_000 });
+    const muted = await token('MUTED', { liq: 60_000 });
+    for (const x of [t, muted]) {
+      await prisma.token.update({ where: { id: x.id }, data: { alphaScore: 82, alphaTier: 'alpha', alphaAt: now, alphaDetail: { reasons: ['Volume accelerating — last 5 min at 3.0× the hour\'s pace'], cautions: [], blockers: [] } } });
+      await prisma.pair.update({ where: { chainId_address: { chainId: 'solana', address: `${x.symbol}-pair` } }, data: { priceUsd: 0.001, marketCapUsd: 100_000 } });
+    }
+    await prisma.telegramSubscriber.update({ where: { id: a.id }, data: { prefs: { ...DEFAULT_ALERT_PREFS, mutedTokens: [muted.id] } as object } });
+
+    const g = await generateAlerts(prisma, { now, dashboardUrl: 'https://radar.example' });
+    expect(g.created.alpha).toBe(1);
+    const call = await prisma.alertEvent.findFirstOrThrow({ where: { kind: 'alpha' } });
+    expect(call.text).toContain('ALPHA CALL');
+    expect(call.text).toContain('Why now');
+    expect(call.text).toContain('accelerating');
+    const buttons = (call.payload as { buttons: Array<Array<{ text: string; url?: string; data?: string }>> }).buttons.flat();
+    expect(buttons.some((b) => b.url === `https://radar.example/token/solana/${t.address}`)).toBe(true);
+    expect(buttons.some((b) => b.data === `m:${t.id}`)).toBe(true);
+    expect((await generateAlerts(prisma, { now: new Date(now.getTime() + 60_000) })).created.alpha).toBe(0); // once per token
+
+    // Deliver it (Telegram gives it message id 501), then the price doubles.
+    const sent: Array<{ html: string; replyTo?: number; buttons?: unknown }> = [];
+    await deliverPending(prisma, async (_c, html, o) => (sent.push({ html, replyTo: o?.replyToMessageId, buttons: o?.buttons }), { ok: true, messageId: 501 + sent.length - 1 }), { sleep: async () => undefined });
+    expect(sent[0].buttons).toBeTruthy();
+    expect((await prisma.alertEvent.findUniqueOrThrow({ where: { id: call.id } })).telegramMessageId).toBe(501n);
+    await prisma.pair.update({ where: { chainId_address: { chainId: 'solana', address: 'ALPHA-pair' } }, data: { priceUsd: 0.0021, marketCapUsd: 210_000, marketUpdatedAt: new Date(now.getTime() + 30 * 60_000) } });
+    const later = new Date(now.getTime() + 31 * 60_000);
+    expect((await generateAlerts(prisma, { now: later })).created.followup).toBe(1);
+    sent.length = 0;
+    await deliverPending(prisma, async (_c, html, o) => (sent.push({ html, replyTo: o?.replyToMessageId }), { ok: true, messageId: 900 }), { sleep: async () => undefined });
+    expect(sent[0].html).toMatch(/ALPHA 2\.1×/);
+    expect(sent[0].replyTo).toBe(501);
+    expect((await generateAlerts(prisma, { now: new Date(later.getTime() + 60_000) })).created.followup).toBe(0); // 2× only once
+
+    const { recapDraft } = await import('./generate');
+    const recap = await recapDraft(prisma, a.id, later);
+    expect(recap?.text).toContain('1 call in 24h');
+    expect(recap?.text).toContain('$ALPHA');
+  });
+
   it('respects chain filters and switched-off kinds', async () => {
-    await sub({ ...DEFAULT_ALERT_PREFS, chains: ['base'] }, 1n);
-    await sub({ ...DEFAULT_ALERT_PREFS, kinds: { ...DEFAULT_ALERT_PREFS.kinds, discovery: false } }, 2n);
+    await sub({ ...RAW, chains: ['base'] }, 1n);
+    await sub({ ...RAW, kinds: { ...RAW.kinds, discovery: false } }, 2n);
     await token('SOLTOK');
     const g = await generateAlerts(prisma, { now });
     expect(g.created.discovery).toBe(0);
@@ -169,7 +212,7 @@ describe.skipIf(!url)('alerts (Postgres)', () => {
   });
 
   it('a hyperactive wallet becomes one digest, and cannot crowd out new-token alerts', async () => {
-    await sub({ ...DEFAULT_ALERT_PREFS, maxPerHour: 3 });
+    await sub({ ...RAW, maxPerHour: 3 });
     const w = await prisma.trackedWallet.create({ data: { chainId: 'solana', address: 'Busy111111111111111111111111111111111111111', label: 'busy', trackedFrom: minsAgo(60) } });
     const rows = Array.from({ length: 8 }, (_, i) => [
       { walletId: w.id, chainId: 'solana', txHash: `tx${i}`, logIndex: 0, blockTime: minsAgo(10 - i), tokenAddress: `T${i}`, direction: 'in', amount: 100, amountRaw: '1', decimals: 9, source: 'test' },
@@ -209,7 +252,7 @@ describe.skipIf(!url)('alerts (Postgres)', () => {
   });
 
   it('holds back alerts past the hourly cap and sends one summary instead', async () => {
-    await sub({ ...DEFAULT_ALERT_PREFS, maxPerHour: 2 });
+    await sub({ ...RAW, maxPerHour: 2 });
     for (const s of ['A1', 'A2', 'A3', 'A4']) await token(s);
     const g = await generateAlerts(prisma, { now });
     expect(g.created.discovery).toBe(2);

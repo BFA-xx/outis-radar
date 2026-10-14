@@ -8,6 +8,7 @@
 import type { Prisma, PrismaClient } from '@outis/db';
 import { type AlertKind, type AlertPrefs, explorerUrl, getChain, getLaunchpad, matchesDiscovery, matchesGraduation, readPrefs } from '@outis/shared';
 import { computePositions } from '../wallets/positions';
+import { type CardButton, analysisCard } from './card';
 import { FOOTER, age, esc, linkLine, pct, qty, riskLine, usd } from './format';
 
 export interface GenerateOptions {
@@ -34,7 +35,14 @@ interface Draft {
   dedupKey: string;
   text: string;
   payload: Record<string, unknown>;
+  /** Event this one replies to in the chat (follow-ups under a call). */
+  replyToId?: string;
 }
+
+/** Call follow-ups: reply once per milestone reached (current price vs price at the call). */
+export const FOLLOWUP_MULTIPLES = [2, 5, 10] as const;
+const FOLLOWUP_WINDOW_MS = 72 * 60 * 60_000;
+const SWEEP_SIZE = 5;
 
 function dashboardLink(base: string | null | undefined, path: string): string | null {
   return base ? `${base.replace(/\/$/, '')}${path}` : null;
@@ -47,7 +55,7 @@ export async function generateAlerts(prisma: PrismaClient, opts: GenerateOptions
   const since = last ? new Date(last.getTime() - OVERLAP_MS) : new Date(now.getTime() - FIRST_RUN_LOOKBACK_MS);
 
   const subs = await prisma.telegramSubscriber.findMany({ where: { active: true } });
-  const stats: GenerateStats = { subscribers: subs.length, created: { discovery: 0, launchpad: 0, risk: 0, wallet: 0, watch: 0, summary: 0 }, suppressed: 0 };
+  const stats: GenerateStats = { subscribers: subs.length, created: { alpha: 0, sweep: 0, followup: 0, recap: 0, discovery: 0, launchpad: 0, risk: 0, wallet: 0, watch: 0, summary: 0 }, suppressed: 0 };
   if (subs.length === 0) {
     await saveCheckpoint(prisma, now);
     return stats;
@@ -68,6 +76,27 @@ export async function generateAlerts(prisma: PrismaClient, opts: GenerateOptions
     },
     include: { baseToken: true },
     take: 2000,
+  });
+
+  // ── Alpha calls and near-misses, re-scored since the last run ────────────
+  const alphaTokens = await prisma.token.findMany({
+    where: { alphaTier: 'alpha', alphaAt: { gte: since } },
+    select: { id: true, chainId: true, symbol: true, alphaScore: true, pairs: { where: { isPrimary: true }, take: 1, select: { priceUsd: true, marketCapUsd: true, fdvUsd: true, liquidityUsd: true } } },
+    orderBy: { alphaScore: 'desc' },
+    take: 50,
+  });
+  const cards = new Map<string, Awaited<ReturnType<typeof analysisCard>>>();
+  const cardFor = async (tokenId: string, header: string) => {
+    const key = `${tokenId}|${header}`;
+    if (!cards.has(key)) cards.set(key, await analysisCard(prisma, tokenId, { header, dashboardUrl: opts.dashboardUrl, now, muteButton: true }));
+    return cards.get(key)!;
+  };
+  const hourIndex = Math.floor(now.getTime() / 3_600_000);
+  const sweepPool = await prisma.token.findMany({
+    where: { alphaTier: 'watch', alphaAt: { gte: new Date(now.getTime() - 60 * 60_000) } },
+    select: { id: true, chainId: true, address: true, symbol: true, alphaScore: true, alphaDetail: true, pairs: { where: { isPrimary: true }, take: 1, select: { marketCapUsd: true, fdvUsd: true, liquidityUsd: true, priceChangeH1: true } } },
+    orderBy: { alphaScore: 'desc' },
+    take: 40,
   });
 
   const graduations = await prisma.token.findMany({
@@ -129,6 +158,37 @@ export async function generateAlerts(prisma: PrismaClient, opts: GenerateOptions
     const drafts: Draft[] = [];
     const chainOk = (id: string) => prefs.chains.length === 0 || prefs.chains.includes(id);
 
+    const muted = new Set(prefs.mutedTokens);
+
+    if (prefs.kinds.alpha) {
+      for (const t of alphaTokens) {
+        if (!chainOk(t.chainId) || muted.has(t.id) || (t.alphaScore ?? 0) < prefs.alpha.minScore) continue;
+        const card = await cardFor(t.id, `🔥 <b>ALPHA CALL</b> · score ${t.alphaScore}/100`);
+        if (!card) continue;
+        const p = t.pairs[0];
+        drafts.push({
+          kind: 'alpha',
+          dedupKey: `alpha:${t.id}`,
+          text: card.text,
+          payload: { tokenId: t.id, chainId: t.chainId, symbol: t.symbol, score: t.alphaScore, priceUsd: p?.priceUsd ?? null, marketCapUsd: p?.marketCapUsd ?? p?.fdvUsd ?? null, liquidityUsd: p?.liquidityUsd ?? null, buttons: card.buttons },
+        });
+      }
+    }
+
+    if (prefs.kinds.sweep) {
+      const called = new Set(
+        (await prisma.alertEvent.findMany({ where: { subscriberId: sub.id, kind: 'alpha' }, select: { payload: true } })).map((e) => String((e.payload as { tokenId?: string } | null)?.tokenId)),
+      );
+      const picks = sweepPool.filter((t) => chainOk(t.chainId) && !muted.has(t.id) && !called.has(t.id)).slice(0, SWEEP_SIZE);
+      if (picks.length >= 2) drafts.push(sweepDraft(picks, hourIndex, opts.dashboardUrl));
+    }
+
+    if (prefs.kinds.followup) drafts.push(...(await followupDrafts(prisma, sub.id, now)));
+    if (prefs.kinds.recap && now.getUTCHours() === prefs.recapHourUtc) {
+      const r = await recapDraft(prisma, sub.id, now);
+      if (r) drafts.push(r);
+    }
+
     if (prefs.kinds.discovery) drafts.push(...discoveryDrafts(discoveryPool, prefs, now, opts.dashboardUrl));
 
     if (prefs.kinds.launchpad) drafts.push(...graduationDrafts(graduations, prefs, now, opts.dashboardUrl));
@@ -175,7 +235,8 @@ export async function generateAlerts(prisma: PrismaClient, opts: GenerateOptions
       }
     }
 
-    await insertWithCap(prisma, sub.id, prefs, drafts, now, stats);
+    const audible = drafts.filter((d) => !muted.has(String((d.payload as { tokenId?: string }).tokenId ?? '')));
+    await insertWithCap(prisma, sub.id, prefs, audible, now, stats);
   }
 
   await saveCheckpoint(prisma, now);
@@ -375,19 +436,20 @@ async function insertWithCap(prisma: PrismaClient, subscriberId: string, prefs: 
   let room = Math.max(0, prefs.maxPerHour - lastHour);
   // Risk escalations first; then the other kinds take turns, so one noisy
   // source (a hyperactive wallet) cannot crowd out everything else.
-  const risk = fresh.filter((d) => d.kind === 'risk');
-  const queues = (['wallet', 'launchpad', 'watch', 'discovery'] as const).map((k) => fresh.filter((d) => d.kind === k));
-  const interleaved: Draft[] = [...risk];
+  // Calls, follow-ups and risk escalations first; the recap is never held back.
+  const first = fresh.filter((d) => d.kind === 'recap' || d.kind === 'followup' || d.kind === 'alpha' || d.kind === 'risk');
+  const queues = (['wallet', 'sweep', 'launchpad', 'watch', 'discovery'] as const).map((k) => fresh.filter((d) => d.kind === k));
+  const interleaved: Draft[] = [...first];
   while (queues.some((q) => q.length)) for (const q of queues) if (q.length) interleaved.push(q.shift()!);
   fresh.splice(0, fresh.length, ...interleaved);
   let suppressed = 0;
   const rows = fresh.map((d) => {
-    const send = room > 0;
+    const send = room > 0 || d.kind === 'recap' || d.kind === 'followup';
     if (send) room--;
     else suppressed++;
     if (send) stats.created[d.kind]++;
     // createdAt from the generator's clock, so cooldowns and the hourly cap all use one timeline.
-    return { subscriberId, kind: d.kind, dedupKey: d.dedupKey, text: d.text, payload: d.payload as Prisma.InputJsonValue, status: send ? 'pending' : 'suppressed', createdAt: now };
+    return { subscriberId, kind: d.kind, dedupKey: d.dedupKey, text: d.text, payload: d.payload as Prisma.InputJsonValue, replyToId: d.replyToId ?? null, status: send ? 'pending' : 'suppressed', createdAt: now };
   });
   await prisma.alertEvent.createMany({ data: rows, skipDuplicates: true });
   if (suppressed > 0) {
@@ -399,4 +461,100 @@ async function insertWithCap(prisma: PrismaClient, subscriberId: string, prefs: 
     });
     stats.created.summary += r.count;
   }
+}
+
+type SweepToken = { id: string; chainId: string; address: string; symbol: string | null; alphaScore: number | null; alphaDetail: unknown; pairs: Array<{ marketCapUsd: number | null; fdvUsd: number | null; liquidityUsd: number | null; priceChangeH1: number | null }> };
+
+/** Hourly digest of near-misses: close to a call, not there yet. */
+export function sweepDraft(picks: SweepToken[], hourIndex: number, dashboardUrl?: string | null): Draft {
+  const lines = picks.map((t, i) => {
+    const p = t.pairs[0];
+    const why = ((t.alphaDetail as { reasons?: string[] } | null)?.reasons ?? []).find((r) => !r.startsWith('Momentum')) ?? '';
+    const chain = getChain(t.chainId);
+    const dash = dashboardLink(dashboardUrl, `/token/${t.chainId}/${encodeURIComponent(t.address)}`);
+    const name = dash ? `<a href="${esc(dash)}">${esc(t.symbol ?? t.address.slice(0, 6))}</a>` : `<b>${esc(t.symbol ?? t.address.slice(0, 6))}</b>`;
+    return `${i + 1}. ${name} · ${esc(chain?.displayName ?? t.chainId)} · ${t.alphaScore} · MC ${usd(p?.marketCapUsd ?? p?.fdvUsd)} · 1h ${pct(p?.priceChangeH1 ?? null)}\n    <i>${esc(why)}</i>\n    <code>${esc(t.address)}</code>`;
+  });
+  return {
+    kind: 'sweep',
+    dedupKey: `sweep:${hourIndex}`,
+    text: ['📡 <b>RADAR SWEEP</b> · close to a call, not there yet', '', ...lines, '', 'Paste any CA here for the full card.', FOOTER].join('\n'),
+    payload: { tokenIds: picks.map((t) => t.id) },
+  };
+}
+
+/** Replies under calls: 2×/5×/10× from the call price, or a rug warning. Highest new milestone only. */
+export async function followupDrafts(prisma: PrismaClient, subscriberId: string, now: Date): Promise<Draft[]> {
+  const calls = await prisma.alertEvent.findMany({
+    where: { subscriberId, kind: 'alpha', status: 'sent', createdAt: { gte: new Date(now.getTime() - FOLLOWUP_WINDOW_MS) } },
+    select: { id: true, payload: true, createdAt: true },
+  });
+  if (calls.length === 0) return [];
+  const done = new Set(
+    (await prisma.alertEvent.findMany({ where: { subscriberId, kind: 'followup', replyToId: { in: calls.map((c) => c.id) } }, select: { dedupKey: true } })).map((e) => e.dedupKey),
+  );
+  const out: Draft[] = [];
+  for (const c of calls) {
+    const p = c.payload as { tokenId?: string; symbol?: string | null; priceUsd?: number | null; marketCapUsd?: number | null; liquidityUsd?: number | null } | null;
+    if (!p?.tokenId || !p.priceUsd) continue;
+    const pair = await prisma.pair.findFirst({ where: { baseTokenId: p.tokenId, isPrimary: true }, select: { priceUsd: true, liquidityUsd: true, marketCapUsd: true, fdvUsd: true, marketUpdatedAt: true } });
+    if (!pair?.priceUsd || !pair.marketUpdatedAt || now.getTime() - pair.marketUpdatedAt.getTime() > 60 * 60_000) continue;
+    const x = pair.priceUsd / p.priceUsd;
+    const since = age((now.getTime() - c.createdAt.getTime()) / 60_000);
+    const sym = esc(p.symbol ?? '?');
+    const rugged = x <= 0.25 || (p.liquidityUsd && pair.liquidityUsd !== null && pair.liquidityUsd < p.liquidityUsd * 0.2);
+    if (rugged && !done.has(`fu:${c.id}:rug`)) {
+      out.push({ kind: 'followup', replyToId: c.id, dedupKey: `fu:${c.id}:rug`, payload: { tokenId: p.tokenId, x }, text: `🩸 <b>$${sym}</b> is down ${Math.round((1 - x) * 100)}% since the call (${since})${pair.liquidityUsd !== null ? ` · liquidity now ${usd(pair.liquidityUsd)}` : ''}. Treat as dead unless it recovers.` });
+      continue;
+    }
+    const hit = [...FOLLOWUP_MULTIPLES].reverse().find((m) => x >= m);
+    if (hit && !done.has(`fu:${c.id}:${hit}x`)) {
+      out.push({
+        kind: 'followup',
+        replyToId: c.id,
+        dedupKey: `fu:${c.id}:${hit}x`,
+        payload: { tokenId: p.tokenId, x },
+        text: `🚀 <b>$${sym} ${x.toFixed(1)}×</b> since the call (${since}) · MC ${usd(p.marketCapUsd ?? null)} → ${usd(pair.marketCapUsd ?? pair.fdvUsd)}`,
+      });
+    }
+  }
+  return out;
+}
+
+/** Once a day: every call of the last 24h and how it did — the bot's own report card. */
+export async function recapDraft(prisma: PrismaClient, subscriberId: string, now: Date): Promise<Draft | null> {
+  const calls = await prisma.alertEvent.findMany({
+    where: { subscriberId, kind: 'alpha', status: 'sent', createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } },
+    select: { id: true, payload: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const day = now.toISOString().slice(0, 10);
+  if (calls.length === 0) {
+    return { kind: 'recap', dedupKey: `recap:${day}`, payload: { calls: 0 }, text: '🗓 <b>DAILY RECAP</b>\nNo alpha calls in the last 24h — nothing met the bar. Quiet days are part of the filter.' };
+  }
+  const rows: Array<{ sym: string; now: number | null; peak: number | null }> = [];
+  for (const c of calls) {
+    const p = c.payload as { tokenId?: string; symbol?: string | null; priceUsd?: number | null } | null;
+    if (!p?.tokenId || !p.priceUsd) continue;
+    const pair = await prisma.pair.findFirst({ where: { baseTokenId: p.tokenId, isPrimary: true }, select: { id: true, priceUsd: true } });
+    const peak = pair ? await prisma.marketSnapshot.aggregate({ where: { pairId: pair.id, observedAt: { gte: c.createdAt } }, _max: { priceUsd: true } }) : null;
+    rows.push({ sym: p.symbol ?? '?', now: pair?.priceUsd ? pair.priceUsd / p.priceUsd : null, peak: peak?._max.priceUsd ? peak._max.priceUsd / p.priceUsd : null });
+  }
+  const fmt = (v: number | null) => (v === null ? '?' : `${v.toFixed(2)}×`);
+  const hits = rows.filter((r) => (r.peak ?? 0) >= 2).length;
+  const nows = rows.map((r) => r.now).filter((v): v is number => v !== null).sort((a, b) => a - b);
+  const median = nows.length ? nows[Math.floor(nows.length / 2)] : null;
+  return {
+    kind: 'recap',
+    dedupKey: `recap:${day}`,
+    payload: { calls: rows.length, hits, median },
+    text: [
+      `🗓 <b>DAILY RECAP</b> · ${rows.length} call${rows.length === 1 ? '' : 's'} in 24h`,
+      `Reached 2× at some point: <b>${hits}/${rows.length}</b> · median now ${fmt(median)}`,
+      '',
+      ...rows.map((r) => `${(r.peak ?? 0) >= 2 ? '🟢' : (r.now ?? 1) < 0.5 ? '🔴' : '⚪️'} $${esc(r.sym)} · peak ${fmt(r.peak)} · now ${fmt(r.now)}`),
+      '',
+      '<i>Peak is the highest price we observed after the call (every few minutes), not the exact top. Full history: /performance on the dashboard.</i>',
+    ].join('\n'),
+  };
 }

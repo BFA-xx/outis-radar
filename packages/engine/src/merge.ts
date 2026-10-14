@@ -85,6 +85,7 @@ function mergeToken(sorted: PairObservation[], side: 'baseToken' | 'quoteToken')
     name: first('name'),
     decimals: first('decimals'),
     imageUrl: first('imageUrl'),
+    links: first('links'),
   };
 }
 

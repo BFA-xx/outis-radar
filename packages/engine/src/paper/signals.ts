@@ -43,6 +43,13 @@ export const SIGNAL_RULES: SignalRule[] = [
     prefs: { ...base, discovery: { ...base.discovery, minLiquidityUsd: 10_000, minVolumeH24: 0, minMomentum: 0, maxRisk: 19 } },
   },
   {
+    id: 'alpha',
+    label: 'Alpha calls',
+    description: 'What the Telegram bot calls: alpha score ≥ 70 from confluence (momentum, acceleration, buyers, liquidity growth, fresh graduation) with clean contract checks. The number that says whether the bot is worth listening to.',
+    prefs: base,
+    match: (s) => s.alphaTier === 'alpha',
+  },
+  {
     id: 'graduated',
     label: 'Launchpad graduates',
     description: `Any launchpad token (pump.fun, four.meme, …) seen within ${GRADUATION_WINDOW_MINUTES} min of graduating to an open pool, liquidity ≥ $5K. No momentum or risk filter — tests whether graduation alone is an edge.`,
@@ -65,6 +72,8 @@ export interface SignalInput {
   riskCoverage: number | null;
   /** Minutes since the token graduated from its launchpad; null if it has not (or no launchpad is known). */
   graduatedMinutesAgo?: number | null;
+  alphaTier?: string | null;
+  alphaScore?: number | null;
 }
 
 /** Which rules does this snapshot of a token match? Pure. */

@@ -10,7 +10,7 @@
 import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { type Prisma, type PrismaClient } from '@outis/db';
-import { esc, extractAddress, lookupToken, tokenCard, type Sender } from '@outis/engine';
+import { analysisCard, esc, extractAddress, lookupToken, recapDraft, type Sender } from '@outis/engine';
 import {
   ALERT_KINDS,
   type AlertKind,
@@ -37,18 +37,25 @@ export interface BotDeps {
 }
 
 const KIND_LABEL: Record<AlertKind, string> = {
-  discovery: 'New tokens',
-  launchpad: 'Launchpad graduations',
+  alpha: '🔥 Alpha calls',
+  sweep: '📡 Hourly radar sweep',
+  followup: '🚀 Call follow-ups',
+  recap: '🗓 Daily recap',
+  discovery: 'Raw feed: every new token',
+  launchpad: 'Raw feed: every graduation',
   risk: 'Risk escalations',
   wallet: 'Wallet trades',
   watch: 'Watchlist moves',
 };
 
 const HELP = [
-  '<b>OUTIS RADAR alerts</b>',
+  '<b>OUTIS RADAR</b> — early-token radar across 15 chains',
   '',
-  '<b>Paste any contract address</b> (or a DEX Screener link) to get a token check.',
+  '🔎 <b>Paste any contract address</b> (or a DEX Screener / pump.fun link) for a full analysis card.',
+  '🔥 <b>Alpha calls</b> arrive only when several signals line up on a token with clean contract checks — expect a few a day, sometimes none.',
+  '🚀 Calls get follow-ups under them at 2×, 5×, 10× — or a warning if they die. A daily recap scores every call.',
   '',
+  '/recap — how today\'s calls are doing',
   '/prefs — your settings, with on/off switches',
   '/set &lt;key&gt; &lt;value&gt; — e.g. <code>/set minliq 50k</code>',
   `   keys: ${Object.keys(PREF_SETTERS).join(', ')}`,
@@ -67,6 +74,7 @@ const HELP = [
 /** The command menu Telegram shows. */
 export const BOT_COMMANDS = [
   { command: 'check', description: 'Check a token by contract address' },
+  { command: 'recap', description: "How today's calls are doing" },
   { command: 'prefs', description: 'Your alert settings' },
   { command: 'set', description: 'Change a threshold' },
   { command: 'chains', description: 'Limit alerts to chains' },
@@ -93,15 +101,19 @@ export function describePrefs(p: AlertPrefs, active: boolean): string {
     ...ALERT_KINDS.map((k) => `${p.kinds[k] ? '✅' : '⬜️'} ${KIND_LABEL[k]}`),
     '',
     `<b>Chains:</b> ${p.chains.length ? p.chains.map((c) => esc(getChain(c)?.displayName ?? c)).join(', ') : 'all scanned'}`,
-    '<b>New-token filter</b>',
+    `<b>Alpha calls:</b> score ≥ ${p.alpha.minScore} (change: <code>/set minalpha 80</code>) · recap at ${String(p.recapHourUtc).padStart(2, '0')}:00 UTC`,
+    p.mutedTokens.length ? `<b>Muted tokens:</b> ${p.mutedTokens.length}` : '',
+    '<b>Raw new-token feed filter</b> (if switched on)',
     `  liquidity ≥ $${d.minLiquidityUsd.toLocaleString('en-US')} · 24h volume ≥ $${d.minVolumeH24.toLocaleString('en-US')}`,
     `  age ≤ ${d.maxAgeMinutes} min · momentum ≥ ${d.minMomentum} · risk ≤ ${d.maxRisk}`,
     `  at least ${Math.round(d.minRiskCoverage * 100)}% of risk checks must have run`,
     `<b>Graduations:</b> ${p.launchpad.ids.length ? p.launchpad.ids.map((id) => esc(getLaunchpad(id)?.name ?? id)).join(', ') : 'all known launchpads'} · liquidity ≥ $${p.launchpad.minLiquidityUsd.toLocaleString('en-US')} · known risk ≤ ${p.launchpad.maxRisk}`,
     `<b>Watchlist move:</b> ±${p.watch.priceMovePct}% in 1h`,
     `<b>Wallet trades:</b> ≥ ${p.wallet.minNative} native coin`,
-    `<b>Cap:</b> ${p.maxPerHour} alerts/hour`,
-  ].join('\n');
+    `<b>Cap:</b> ${p.maxPerHour} alerts/hour (follow-ups and the recap are never held back)`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function kindsKeyboard(p: AlertPrefs): InlineKeyboard {
@@ -147,7 +159,7 @@ export function createBot(token: string, deps: BotDeps): Bot {
       create: { chatId: BigInt(ctx.chat.id), userId: BigInt(ctx.from!.id), username: ctx.from?.username ?? null, prefs: DEFAULT_ALERT_PREFS as unknown as Prisma.InputJsonValue },
       update: { active: true, username: ctx.from?.username ?? null },
     });
-    await ctx.reply(`👋 You're subscribed. Defaults are strict, so expect a few alerts a day, not a firehose.\n\n${HELP}`, { parse_mode: 'HTML' });
+    await ctx.reply(`👋 <b>Welcome to OUTIS RADAR.</b> You're subscribed.\n\n${HELP}`, { parse_mode: 'HTML' });
   });
 
   bot.command('help', (ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
@@ -166,7 +178,7 @@ export function createBot(token: string, deps: BotDeps): Bot {
     await ctx.reply(describePrefs(p, s.active), { parse_mode: 'HTML', reply_markup: kindsKeyboard(p) });
   });
 
-  bot.callbackQuery(/^toggle:(discovery|launchpad|risk|wallet|watch)$/, async (ctx) => {
+  bot.callbackQuery(/^toggle:(alpha|sweep|followup|recap|discovery|launchpad|risk|wallet|watch)$/, async (ctx) => {
     const s = await subscriberFor(ctx);
     if (!s) return ctx.answerCallbackQuery({ text: 'Send /start first.' });
     const kind = ctx.match[1] as AlertKind;
@@ -328,9 +340,50 @@ export function createBot(token: string, deps: BotDeps): Bot {
           : 'No trading pool found for that address on any chain we cover. It may not be trading yet, or it is a wallet rather than a token.',
       );
     }
-    const card = await tokenCard(prisma, r.hits[0].tokenId, { dashboardUrl: deps.dashboardUrl, otherChains: r.hits.slice(1).map((h) => h.chainId) });
-    return edit(card ?? 'Found it, but could not build the card.');
+    const card = await analysisCard(prisma, r.hits[0].tokenId, { dashboardUrl: deps.dashboardUrl, otherChains: r.hits.slice(1).map((h) => h.chainId) });
+    if (!card) return edit('Found it, but could not build the card.');
+    return ctx.api
+      .editMessageText(ctx.chat!.id, note.message_id, card.text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: keyboard(card.buttons) })
+      .catch(() => ctx.reply(card.text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: keyboard(card.buttons) }));
   };
+
+  // ── Card buttons: watch, mute, refresh ──────────────────────────────────
+  bot.callbackQuery(/^w:(.+)$/, async (ctx) => {
+    const t = await prisma.token.findUnique({ where: { id: ctx.match[1] } });
+    if (!t) return ctx.answerCallbackQuery({ text: 'Token no longer tracked.' });
+    const list = await prisma.watchlist.upsert({ where: { name: 'Telegram' }, create: { name: 'Telegram' }, update: {} });
+    await prisma.watchlistItem.upsert({
+      where: { watchlistId_kind_chainId_address: { watchlistId: list.id, kind: 'token', chainId: t.chainId, address: t.address } },
+      create: { watchlistId: list.id, kind: 'token', chainId: t.chainId, address: t.address },
+      update: {},
+    });
+    await ctx.answerCallbackQuery({ text: `👀 Watching ${t.symbol ?? 'it'} — you'll hear about big moves.` });
+  });
+
+  bot.callbackQuery(/^m:(.+)$/, async (ctx) => {
+    const s = await subscriberFor(ctx);
+    if (!s) return ctx.answerCallbackQuery({ text: 'Send /start first.' });
+    const p = readPrefs(s.prefs);
+    if (!p.mutedTokens.includes(ctx.match[1])) p.mutedTokens = [...p.mutedTokens.slice(-499), ctx.match[1]];
+    await savePrefs(ctx.chat!.id, p);
+    await ctx.answerCallbackQuery({ text: '🔕 Muted — no more alerts or follow-ups for this token.' });
+  });
+
+  bot.callbackQuery(/^r:(.+)$/, async (ctx) => {
+    const t = await prisma.token.findUnique({ where: { id: ctx.match[1] } });
+    if (!t) return ctx.answerCallbackQuery({ text: 'Token no longer tracked.' });
+    await ctx.answerCallbackQuery({ text: 'Refreshing…' });
+    await lookupToken(prisma, t.address, { contractChecks: true });
+    const card = await analysisCard(prisma, t.id, { dashboardUrl: deps.dashboardUrl });
+    if (card) await ctx.editMessageText(card.text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: keyboard(card.buttons) }).catch(() => undefined);
+  });
+
+  bot.command('recap', async (ctx) => {
+    const s = await needSub(ctx);
+    if (!s) return;
+    const r = await recapDraft(prisma, s.id, new Date());
+    await ctx.reply(r?.text ?? 'Nothing to report yet.', { parse_mode: 'HTML' });
+  });
 
   bot.command('check', async (ctx) => {
     const arg = ctx.match.trim();
@@ -354,11 +407,31 @@ export function createBot(token: string, deps: BotDeps): Bot {
 }
 
 /** Telegram sender for the outbox. Maps Telegram errors to retry / give up. */
+/** Inline keyboard from plain rows (URL buttons or callback data). */
+export function keyboard(rows: Array<Array<{ text: string; url?: string; data?: string }>> | undefined): InlineKeyboard | undefined {
+  if (!rows?.length) return undefined;
+  const kb = new InlineKeyboard();
+  rows.forEach((row, i) => {
+    for (const b of row) {
+      if (b.url) kb.url(b.text, b.url);
+      else if (b.data) kb.text(b.text, b.data);
+    }
+    if (i < rows.length - 1) kb.row();
+  });
+  return kb;
+}
+
 export function telegramSender(bot: Bot): Sender {
-  return async (chatId, html) => {
+  return async (chatId, html, opts) => {
     try {
-      await bot.api.sendMessage(Number(chatId), html, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-      return { ok: true };
+      const m = await bot.api.sendMessage(Number(chatId), html, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        reply_markup: keyboard(opts?.buttons),
+        // A deleted original must not block the follow-up.
+        ...(opts?.replyToMessageId && { reply_parameters: { message_id: opts.replyToMessageId, allow_sending_without_reply: true } }),
+      });
+      return { ok: true, messageId: m.message_id };
     } catch (err) {
       if (err instanceof GrammyError) {
         if (err.error_code === 429) return { ok: false, retryAfterMs: (err.parameters.retry_after ?? 5) * 1000, error: 'rate limited by Telegram' };
