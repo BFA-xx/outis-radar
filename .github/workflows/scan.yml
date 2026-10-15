@@ -20,11 +20,16 @@
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS   optional, for alerts
 #   RPC_URL_<CHAIN>                            optional, for wallet tracking
 # Repository variables (… → Variables): SCAN_CHAINS, DASHBOARD_URL (both optional).
+# PRIMARY SCANNER: since 2026-10-15 the scanner runs continuously on the
+# Mintooor EC2 box (pm2 apps radar-scan / radar-alerts, ~/outis-radar). GitHub
+# ran "*/15" only every 4-5 hours in practice, far too slow for calls. This
+# workflow is now a backup: if the box is down its run does the work; if the box
+# is up, the job leases make this run skip.
 name: scheduled-scans
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7 */2 * * *'
   workflow_dispatch:
 
 env:

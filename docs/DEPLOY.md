@@ -87,6 +87,17 @@ Commands are answered by the API instantly; alerts are sent by the scheduled job
 schedule's rhythm (every 15 min, or whatever you set). While a webhook is set, the local `npm start` bot only
 delivers alerts and does not poll; `--delete-webhook` switches back.
 
+## The always-on scanner (since 2026-10-15)
+
+GitHub's schedule turned out to run every 4–5 hours, not every 15 minutes — too slow for
+alpha calls. The scanner now runs on the existing Mintooor server, isolated:
+
+- folder `~/outis-radar`, its own `.env` (mode 600), pm2 apps **radar-scan** (all jobs, back to
+  back, ~5 min per cycle) and **radar-alerts** (alert delivery every 60 s)
+- memory capped (260 MB / 160 MB, auto-restart above), CPU priority lowered — Mintooor wins
+- update: `cd ~/outis-radar && git pull && npm run build:packages && npm run build -w @outis/worker -w @outis/bot && pm2 restart radar-scan radar-alerts`
+- stop: `pm2 stop radar-scan radar-alerts` (GitHub's 2-hourly backup run then takes over)
+
 ## Monitoring
 
 - **Settings** page: which secrets are present (never their values), last good run of every job, alert counts.
