@@ -178,6 +178,22 @@ describe.skipIf(!url)('discovery scan (Postgres)', () => {
     expect(h.errorsTotal).toBe(3); // 1 attempt + 2 retries (GT budget is scarce)
   });
 
+  it('refreshes hot tokens (near an alpha call) ahead of the stale queue', async () => {
+    const recent = new Date(Date.now() - 2 * 60 * 60_000);
+    const cold = Array.from({ length: 8 }, (_, i) => `ColdPair${i}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`);
+    for (const [i, addr] of [...cold, 'HotPairxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'].entries()) {
+      const hot = addr.startsWith('Hot');
+      const t = await prisma.token.create({ data: { chainId: 'solana', address: `Mint${i}${'x'.repeat(36)}`, firstSeenSource: 'test', ...(hot && { alphaScore: 62, momentumScore: 70 }) } });
+      await prisma.pair.create({
+        data: { chainId: 'solana', address: addr, baseTokenId: t.id, quoteTokenAddress: 'So11111111111111111111111111111111111111112', isPrimary: true, pairCreatedAt: recent, liquidityUsd: 20_000, marketUpdatedAt: recent },
+      });
+    }
+    const { fetchImpl, calls } = routedFetch();
+    await runDiscoveryScan({ prisma, config: { ...config, chains: [requireChain('solana')], refreshLimit: 3 }, logger: quiet, fetchImpl, sleep: noSleep, trigger: 'test' });
+    const refreshCalls = calls.filter((u) => u.includes('/latest/dex/pairs/solana/') && u.includes('ColdPair') || u.includes('HotPair'));
+    expect(refreshCalls.some((u) => u.includes('HotPairxxxx'))).toBe(true);
+  });
+
   it('stops at the deadline and still finalizes the run', async () => {
     const r = await runDiscoveryScan({
       prisma,

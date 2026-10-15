@@ -82,6 +82,11 @@ function addPersist(into: PersistStats, from: PersistStats): void {
   into.errors.push(...from.errors.slice(0, 10 - into.errors.length));
 }
 
+/** Hot-token refresh: alpha or momentum at/above these, at most HOT_LIMIT pairs per chain per scan. */
+export const HOT_ALPHA = 40;
+export const HOT_MOMENTUM = 55;
+export const HOT_LIMIT = 60;
+
 export async function runDiscoveryScan(deps: ScanDeps): Promise<ScanResult> {
   const { prisma, config, logger } = deps;
   const startedAt = Date.now();
@@ -230,13 +235,28 @@ export async function runDiscoveryScan(deps: ScanDeps): Promise<ScanResult> {
           ...(await prisma.signal.findMany({ where: { status: 'tracking', chainId: chain.id }, select: { pairId: true }, distinct: ['pairId'] })).map((x) => x.pairId),
           ...(await prisma.paperTrade.findMany({ where: { status: 'open', chainId: chain.id }, select: { pairId: true } })).map((x) => x.pairId),
         ]);
-        const priority = followed.size
+        const followedPairs = followed.size
           ? await prisma.pair.findMany({
               where: { id: { in: [...followed] }, OR: [{ marketUpdatedAt: null }, { marketUpdatedAt: { lt: justWritten } }] },
               take: config.refreshLimit,
               select: { address: true },
             })
           : [];
+        // Hot tokens — close to an alpha call or with strong momentum — are refreshed
+        // every scan: a call is only as good as the freshness of the data behind it.
+        const hot = await prisma.pair.findMany({
+          where: {
+            chainId: chain.id,
+            isPrimary: true,
+            OR: [{ pairCreatedAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) } }, { pairCreatedAt: null }],
+            AND: [{ OR: [{ marketUpdatedAt: null }, { marketUpdatedAt: { lt: justWritten } }] }],
+            baseToken: { OR: [{ alphaScore: { gte: HOT_ALPHA } }, { momentumScore: { gte: HOT_MOMENTUM } }] },
+          },
+          orderBy: { liquidityUsd: { sort: 'desc', nulls: 'last' } },
+          take: Math.min(HOT_LIMIT, config.refreshLimit),
+          select: { address: true },
+        });
+        const priority = [...followedPairs, ...hot.filter((h) => !followedPairs.some((f) => f.address === h.address))];
         const others = await prisma.pair.findMany({
           where: {
             chainId: chain.id,
